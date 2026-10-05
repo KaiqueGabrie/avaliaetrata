@@ -1,18 +1,21 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
-import { useColorScheme } from 'react-native';
+import { Stack } from 'expo-router';
 
-import { AnimatedSplashOverlay } from '@/components/animated-icon';
-import AppTabs from '@/components/app-tabs';
-
-SplashScreen.preventAutoHideAsync();
-
-export default function TabLayout() {
-  const colorScheme = useColorScheme();
+export default function Layout() {
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <AnimatedSplashOverlay />
-      <AppTabs />
-    </ThemeProvider>
+    <Stack
+      screenOptions={{
+        headerStyle: { backgroundColor: '#0056b3' },
+        headerTintColor: '#fff',
+        headerTitleStyle: { fontWeight: 'bold' },
+      }}
+    >
+      <Stack.Screen name="index" options={{ title: 'Início', headerShown: false }} />
+      <Stack.Screen name="home" options={{ title: 'Painel Principal' }} />
+      <Stack.Screen name="pacientes" options={{ title: 'Pacientes Cadastrados' }} />
+      <Stack.Screen name="paciente/novo" options={{ title: 'Novo Paciente' }} />
+      <Stack.Screen name="paciente/[id]" options={{ title: 'Prontuário do Paciente' }} />
+      <Stack.Screen name="avaliacao/nova" options={{ title: 'Nova Avaliação' }} />
+      <Stack.Screen name="explore" options={{ title: 'Explorar Recursos' }} />
+    </Stack>
   );
 }
