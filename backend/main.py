@@ -1,86 +1,48 @@
+
 import os
 import uuid
+from typing import Optional
 
-from fastapi import (
-    FastAPI,
-    File,
-    UploadFile,
-    Form,
-    HTTPException
-)
-
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from schemas.multimodal import AnaliseMultimodalInput
 from services.image_processing import ImageProcessingService
 from services.multimodal.orchestrator import MultimodalOrchestrator
-
-
-# ============================================================
-# CONFIGURAÇÃO DA API
-# ============================================================
+from schemas.multimodal import (
+    AnaliseMultimodalInput,
+    DadosClinicosInput,
+    AnaliseTecnicaOpenCVInput,
+    ResultadoAnaliseMultimodal,
+)
 
 app = FastAPI(
-    title="API Avalia & Trata",
+    title="API Avalia & Trata - Análise Técnica e Arquitetura Multimodal",
     description=(
-        "Backend para processamento de imagens "
-        "e análise multimodal"
+        "Sistema de apoio à análise descritiva e ao acompanhamento "
+        "de feridas, com processamento de imagem e análise multimodal."
     ),
-    version="1.0.0"
 )
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+PROCESSED_DIR = os.path.join(BASE_DIR, "processed")
 
-# ============================================================
-# DIRETÓRIOS
-# ============================================================
+EXTENSOES_PERMITIDAS = {".jpg", ".jpeg", ".png", ".webp"}
 
-BASE_DIR = os.path.dirname(
-    os.path.abspath(__file__)
-)
-
-UPLOAD_DIR = os.path.join(
-    BASE_DIR,
-    "uploads"
-)
-
-PROCESSED_DIR = os.path.join(
-    BASE_DIR,
-    "processed"
-)
-
-
-os.makedirs(
-    UPLOAD_DIR,
-    exist_ok=True
-)
-
-os.makedirs(
-    PROCESSED_DIR,
-    exist_ok=True
-)
-
-
-# ============================================================
-# ARQUIVOS ESTÁTICOS
-# ============================================================
-
-app.mount(
-    "/uploads",
-    StaticFiles(directory=UPLOAD_DIR),
-    name="uploads"
-)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(PROCESSED_DIR, exist_ok=True)
 
 app.mount(
     "/processed",
     StaticFiles(directory=PROCESSED_DIR),
-    name="processed"
+    name="processed",
 )
-
-
-# ============================================================
-# CORS
-# ============================================================
+app.mount(
+    "/uploads",
+    StaticFiles(directory=UPLOAD_DIR),
+    name="uploads",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -90,542 +52,280 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# ============================================================
-# ORQUESTRADOR MULTIMODAL
-# ============================================================
-
-multimodal_orchestrator = MultimodalOrchestrator()
+orquestrador_multimodal = MultimodalOrchestrator()
 
 
-# ============================================================
-# TESTE DA API
-# ============================================================
-
-@app.get("/")
-def read_root():
-
-    return {
-        "status": "online",
-        "message": (
-            "API Avalia & Trata funcionando "
-            "com FastAPI + OpenCV + análise multimodal"
-        )
-    }
-
-
-# ============================================================
-# FUNÇÃO AUXILIAR
-# ============================================================
-
-async def salvar_e_processar_imagem(
-    file: UploadFile,
-):
-    """
-    Recebe a imagem, valida o arquivo, salva a imagem original
-    e executa o processamento inicial com OpenCV.
-
-    Essa função é reutilizada pelos endpoints que trabalham
-    com a imagem.
-    """
-
-    # ========================================================
-    # 1. VALIDAR ARQUIVO
-    # ========================================================
-
-    if not file.filename:
-
+def obter_extensao_arquivo(filename: Optional[str]) -> str:
+    """Valida a extensão do arquivo enviado."""
+    if not filename:
         raise HTTPException(
-            status_code=400,
-            detail="Nenhuma imagem foi enviada."
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O arquivo enviado não possui um nome válido.",
         )
 
-    content_type = (
-        file.content_type or ""
-    ).lower()
+    extensao = os.path.splitext(filename)[1].lower()
 
-    if not content_type.startswith("image/"):
-
+    if extensao not in EXTENSOES_PERMITIDAS:
         raise HTTPException(
-            status_code=400,
-            detail=(
-                "O arquivo enviado não "
-                "é uma imagem válida."
-            )
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Formato de imagem não permitido. Use JPG, JPEG, PNG ou WEBP.",
         )
 
-    # ========================================================
-    # 2. VALIDAR EXTENSÃO
-    # ========================================================
+    return extensao
 
-    extensao = os.path.splitext(
-        file.filename
-    )[1].lower()
 
-    extensoes_permitidas = {
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".webp"
-    }
+def converter_odor(valor: Optional[str]) -> bool:
+    """Converte valores comuns de formulário para booleano."""
+    valor_normalizado = (valor or "").strip().lower()
 
-    if extensao not in extensoes_permitidas:
+    if valor_normalizado in {"true", "1", "sim", "yes"}:
+        return True
 
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Formato de imagem não suportado. "
-                "Utilize JPG, JPEG, PNG ou WEBP."
-            )
-        )
+    if valor_normalizado in {"false", "0", "nao", "não", "no", ""}:
+        return False
 
-    # ========================================================
-    # 3. GERAR NOME ÚNICO
-    # ========================================================
-
-    nome_unico = (
-        f"{uuid.uuid4().hex}"
-        f"{extensao}"
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Valor inválido para odor. Informe true ou false.",
     )
 
-    caminho_imagem_original = os.path.join(
-        UPLOAD_DIR,
-        nome_unico
-    )
 
-    # ========================================================
-    # 4. RECEBER IMAGEM
-    # ========================================================
+async def salvar_imagem_enviada(file: UploadFile) -> str:
+    """Salva a imagem original e retorna seu caminho no servidor."""
+    extensao = obter_extensao_arquivo(file.filename)
+    nome_unico = f"{uuid.uuid4().hex}{extensao}"
+    caminho_imagem_original = os.path.join(UPLOAD_DIR, nome_unico)
 
     conteudo = await file.read()
 
     if not conteudo:
-
         raise HTTPException(
-            status_code=400,
-            detail="A imagem recebida está vazia."
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O arquivo enviado está vazio.",
         )
 
-    # ========================================================
-    # 5. SALVAR IMAGEM ORIGINAL
-    # ========================================================
-
-    with open(
-        caminho_imagem_original,
-        "wb"
-    ) as arquivo:
-
+    with open(caminho_imagem_original, "wb") as arquivo:
         arquivo.write(conteudo)
 
-    # ========================================================
-    # 6. PROCESSAR COM OPENCV
-    # ========================================================
+    return caminho_imagem_original
 
-    resultado_opencv = (
-        ImageProcessingService
-        .processar_imagem_lesao(
-            caminho_imagem_original=(
-                caminho_imagem_original
-            ),
-            pasta_destino_processadas=(
-                PROCESSED_DIR
-            )
-        )
+
+def processar_imagem(caminho_imagem_original: str):
+    """Executa o processamento técnico da imagem com OpenCV."""
+    return ImageProcessingService.processar_imagem_lesao(
+        caminho_imagem_original=caminho_imagem_original,
+        pasta_destino_processadas=PROCESSED_DIR,
     )
 
-    # ========================================================
-    # 7. MONTAR CAMINHO DA IMAGEM PROCESSADA
-    # ========================================================
 
-    nome_arquivo_processado = (
-        resultado_opencv[
-            "nome_arquivo_processado"
-        ]
-    )
+def montar_url_imagem(nome_arquivo: str, pasta_url: str) -> str:
+    """Monta a URL relativa de uma imagem disponibilizada pela API."""
+    return f"{pasta_url}/{nome_arquivo}"
 
-    caminho_imagem_processada = os.path.join(
-        PROCESSED_DIR,
-        nome_arquivo_processado
-    )
 
-    # ========================================================
-    # 8. URLS
-    # ========================================================
-
-    imagem_original_url = (
-        f"/uploads/{nome_unico}"
-    )
-
-    imagem_processada_url = (
-        f"/processed/"
-        f"{nome_arquivo_processado}"
-    )
-
+@app.get("/")
+def read_root():
     return {
-        "nome_arquivo_original": nome_unico,
-
-        "caminho_imagem_original":
-            caminho_imagem_original,
-
-        "caminho_imagem_processada":
-            caminho_imagem_processada,
-
-        "imagem_original_url":
-            imagem_original_url,
-
-        "imagem_processada_url":
-            imagem_processada_url,
-
-        "resultado_opencv":
-            resultado_opencv
+        "status": "online",
+        "message": "API Avalia & Trata operacional.",
     }
 
 
-# ============================================================
-# ENDPOINT ATUAL — OPENCV
-# ============================================================
-
 @app.post("/analisar-imagem")
 async def analisar_imagem(
-
     file: UploadFile = File(...),
-
     localizacao: str = Form(...),
-
     comprimento: str = Form(""),
-
     largura: str = Form(""),
-
     tipoExsudato: str = Form(""),
-
     odor: str = Form("false"),
-
     nivelDor: str = Form(""),
-
     queixaPrincipal: str = Form(""),
-
-    observacoes: str = Form("")
+    observacoes: str = Form(""),
 ):
+    """
+    Recebe uma imagem, executa o processamento técnico com OpenCV
+    e retorna os dados da imagem e as informações clínicas fornecidas.
+    """
+    caminho_imagem_original = None
 
     try:
+        caminho_imagem_original = await salvar_imagem_enviada(file)
+        resultado_opencv = processar_imagem(caminho_imagem_original)
 
-        resultado = (
-            await salvar_e_processar_imagem(
-                file
-            )
-        )
-
-        resultado_opencv = (
-            resultado[
-                "resultado_opencv"
-            ]
-        )
+        nome_original = os.path.basename(caminho_imagem_original)
+        nome_processado = resultado_opencv["nome_arquivo_processado"]
 
         return {
-
-            "sucesso":
-                True,
-
-            "mensagem":
-                "Imagem recebida e processada com sucesso.",
-
-            "imagem_original_url":
-                resultado[
-                    "imagem_original_url"
-                ],
-
-            "imagem_processada_url":
-                resultado[
-                    "imagem_processada_url"
-                ],
-
-            "dimensoes_originais":
-                resultado_opencv[
-                    "dimensoes_originais"
-                ],
-
-            "dimensoes_processadas":
-                resultado_opencv[
-                    "dimensoes_processadas"
-                ],
-
-            "analise_tecnica":
-                resultado_opencv[
-                    "analise_tecnica"
-                ],
-
-            "processamento_aplicado":
-                resultado_opencv[
-                    "processamento_aplicado"
-                ],
-
+            "sucesso": True,
+            "mensagem": "Imagem recebida, validada e pré-processada com sucesso.",
+            "imagem_original_url": montar_url_imagem(
+                nome_original, "/uploads"
+            ),
+            "imagem_processada_url": montar_url_imagem(
+                nome_processado, "/processed"
+            ),
+            "dimensoes_originais": resultado_opencv["dimensoes_originais"],
+            "dimensoes_processadas": resultado_opencv["dimensoes_processadas"],
+            "analise_tecnica": resultado_opencv["analise_tecnica"],
+            "processamento_aplicado": resultado_opencv["processamento_aplicado"],
             "dados_clinicos": {
-
-                "localizacao":
-                    localizacao,
-
-                "comprimento":
-                    comprimento,
-
-                "largura":
-                    largura,
-
-                "tipoExsudato":
-                    tipoExsudato,
-
-                "odor":
-                    odor,
-
-                "nivelDor":
-                    nivelDor,
-
-                "queixaPrincipal":
-                    queixaPrincipal,
-
-                "observacoes":
-                    observacoes
-            }
+                "localizacao": localizacao,
+                "comprimento": comprimento,
+                "largura": largura,
+                "tipoExsudato": tipoExsudato,
+                "odor": odor,
+                "nivelDor": nivelDor,
+                "queixaPrincipal": queixaPrincipal,
+                "observacoes": observacoes,
+            },
         }
 
     except HTTPException:
         raise
-
     except ValueError as erro:
-
-        print(
-            f"Erro de validação da imagem: {erro}"
-        )
-
         raise HTTPException(
-            status_code=400,
-            detail=str(erro)
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(erro),
         )
-
     except Exception as erro:
-
-        print(
-            f"Erro no processamento da imagem: {erro}"
-        )
-
         raise HTTPException(
-            status_code=500,
-            detail=(
-                "Erro interno ao processar a imagem: "
-                f"{str(erro)}"
-            )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro no pré-processamento da imagem: {str(erro)}",
         )
+    finally:
+        await file.close()
 
-
-# ============================================================
-# ENDPOINT — ANÁLISE MULTIMODAL
-# ============================================================
 
 @app.post("/preparar-analise-multimodal")
 async def preparar_analise_multimodal(
-
     file: UploadFile = File(...),
-
-    avaliacao_id: str = Form(""),
-
     localizacao: str = Form(...),
-
     comprimento: str = Form(""),
-
     largura: str = Form(""),
-
     tipoExsudato: str = Form(""),
-
     odor: str = Form("false"),
-
     nivelDor: str = Form(""),
-
     queixaPrincipal: str = Form(""),
-
-    observacoes: str = Form("")
+    observacoes: str = Form(""),
+    provedor: Optional[str] = Form("gemini"),
 ):
-
     """
-    Recebe a imagem e os dados clínicos, executa o
-    processamento inicial com OpenCV e envia a entrada
-    estruturada para os provedores multimodais.
+    Recebe uma imagem e os dados clínicos, executa o OpenCV e solicita
+    a análise multimodal ao provedor selecionado.
 
-    Nesta etapa o Gemini é o primeiro provedor real
-    conectado ao sistema.
+    Valores aceitos para provedor:
+    - gemini: executa somente o Gemini.
+    - openai: executa somente a OpenAI.
+    - todos: solicita a execução dos dois provedores.
     """
-
     try:
+        provedor_normalizado = (provedor or "gemini").strip().lower()
 
-        # ====================================================
-        # 1. PROCESSAR IMAGEM
-        # ====================================================
-
-        resultado = (
-            await salvar_e_processar_imagem(
-                file
-            )
-        )
-
-        resultado_opencv = (
-            resultado[
-                "resultado_opencv"
-            ]
-        )
-
-        # ====================================================
-        # 2. NORMALIZAR ODOR
-        # ====================================================
-
-        odor_normalizado = (
-            str(odor).strip().lower()
-            in {
-                "true",
-                "1",
-                "sim",
-                "yes"
-            }
-        )
-
-        # ====================================================
-        # 3. CRIAR DADOS CLÍNICOS
-        # ====================================================
-
-        dados_clinicos = {
-
-            "localizacao":
-                localizacao,
-
-            "comprimento":
-                comprimento or None,
-
-            "largura":
-                largura or None,
-
-            "tipoExsudato":
-                tipoExsudato or None,
-
-            "odor":
-                odor_normalizado,
-
-            "nivelDor":
-                nivelDor or None,
-
-            "queixaPrincipal":
-                queixaPrincipal or None,
-
-            "observacoes":
-                observacoes or None
+        provedores_disponiveis = {
+            "gemini": ["gemini"],
+            "openai": ["openai"],
+            "todos": ["gemini", "openai"],
         }
 
-        # ====================================================
-        # 4. CRIAR ENTRADA MULTIMODAL
-        # ====================================================
+        if provedor_normalizado not in provedores_disponiveis:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Provedor inválido. Os valores permitidos são: "
+                    "'gemini', 'openai' ou 'todos'."
+                ),
+            )
 
-        entrada_multimodal = AnaliseMultimodalInput(
-            avaliacao_id=avaliacao_id or None,
+        provedores_desejados = provedores_disponiveis[provedor_normalizado]
 
-            caminho_imagem_original=(
-                resultado[
-                    "caminho_imagem_original"
-                ]
-            ),
+        # 1. Recebe e salva a imagem original.
+        caminho_imagem_original = await salvar_imagem_enviada(file)
 
-            caminho_imagem_processada=(
-                resultado[
-                    "caminho_imagem_processada"
-                ]
-            ),
+        # 2. Executa o processamento técnico com OpenCV.
+        resultado_opencv = processar_imagem(caminho_imagem_original)
 
-            dimensoes_originais=(
-                resultado_opencv[
-                    "dimensoes_originais"
-                ]
-            ),
-
-            dimensoes_processadas=(
-                resultado_opencv[
-                    "dimensoes_processadas"
-                ]
-            ),
-
-            analise_tecnica=(
-                resultado_opencv[
-                    "analise_tecnica"
-                ]
-            ),
-
-            dados_clinicos=dados_clinicos
+        caminho_imagem_processada = os.path.join(
+            PROCESSED_DIR,
+            resultado_opencv["nome_arquivo_processado"],
         )
 
-        # ====================================================
-        # 5. EXECUTAR ANÁLISE MULTIMODAL
-        # ====================================================
+        # 3. Monta os dados padronizados enviados aos provedores.
+        input_multimodal = AnaliseMultimodalInput(
+            avaliacao_id=uuid.uuid4().hex,
+            caminho_imagem_original=caminho_imagem_original,
+            caminho_imagem_processada=caminho_imagem_processada,
+            dimensoes_originais=resultado_opencv["dimensoes_originais"],
+            dimensoes_processadas=resultado_opencv["dimensoes_processadas"],
+            analise_tecnica=AnaliseTecnicaOpenCVInput(
+                brilho_medio=resultado_opencv["analise_tecnica"]["brilho_medio"],
+                contraste_global=resultado_opencv["analise_tecnica"]["contraste_global"],
+            ),
+            dados_clinicos=DadosClinicosInput(
+                localizacao=localizacao,
+                comprimento=comprimento,
+                largura=largura,
+                tipoExsudato=tipoExsudato,
+                odor=converter_odor(odor),
+                nivelDor=nivelDor,
+                queixaPrincipal=queixaPrincipal,
+                observacoes=observacoes,
+            ),
+        )
 
-        resultado_multimodal = (
-            multimodal_orchestrator
-            .executar_analise_comparativa(
-                input_data=entrada_multimodal,
-                provedores_desejados=[
-                    "gemini"
-                ]
+        # 4. Executa a análise pelos provedores solicitados.
+        resultado_comparativo: ResultadoAnaliseMultimodal = (
+            orquestrador_multimodal.executar_analise_comparativa(
+                input_data=input_multimodal,
+                provedores_desejados=provedores_desejados,
             )
         )
 
-        # ====================================================
-        # 6. RETORNO
-        # ====================================================
+        # 5. A mensagem acompanha o resultado geral informado pelo orquestrador.
+        if resultado_comparativo.sucesso_geral:
+            mensagem = (
+                "A análise foi concluída com sucesso para pelo menos "
+                "um dos provedores solicitados."
+            )
+        else:
+            mensagem = (
+                "Nenhum dos provedores solicitados concluiu a análise com sucesso. "
+                "Consulte os resultados e as mensagens de erro retornadas."
+            )
+
+        nome_original = os.path.basename(caminho_imagem_original)
+        nome_processado = resultado_opencv["nome_arquivo_processado"]
 
         return {
-
-            "sucesso":
-                True,
-
-            "mensagem":
-                (
-                    "Imagem processada e enviada "
-                    "para análise multimodal."
-                ),
-
-            "imagem_original_url":
-                resultado[
-                    "imagem_original_url"
-                ],
-
-            "imagem_processada_url":
-                resultado[
-                    "imagem_processada_url"
-                ],
-
-            "entrada_multimodal":
-                entrada_multimodal.model_dump(),
-
-            "resultado_multimodal":
-                resultado_multimodal.model_dump()
+            "sucesso": resultado_comparativo.sucesso_geral,
+            "mensagem": mensagem,
+            "provedor_selecionado": provedor_normalizado,
+            "provedores_solicitados": provedores_desejados,
+            "imagem_original_url": montar_url_imagem(
+                nome_original, "/uploads"
+            ),
+            "imagem_processada_url": montar_url_imagem(
+                nome_processado, "/processed"
+            ),
+            "dimensoes_originais": resultado_opencv["dimensoes_originais"],
+            "dimensoes_processadas": resultado_opencv["dimensoes_processadas"],
+            "analise_tecnica": resultado_opencv["analise_tecnica"],
+            "dados_clinicos": input_multimodal.dados_clinicos.model_dump(),
+            "analise_multimodal": resultado_comparativo.model_dump(),
         }
 
     except HTTPException:
         raise
-
     except ValueError as erro:
-
-        print(
-            f"Erro de validação da análise multimodal: {erro}"
-        )
-
         raise HTTPException(
-            status_code=400,
-            detail=str(erro)
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(erro),
         )
-
     except Exception as erro:
-
-        print(
-            f"Erro na análise multimodal: {erro}"
-        )
-
         raise HTTPException(
-            status_code=500,
-            detail=(
-                "Erro interno na análise multimodal: "
-                f"{str(erro)}"
-            )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro na pipeline multimodal: {str(erro)}",
         )
+    finally:
+        await file.close()
+

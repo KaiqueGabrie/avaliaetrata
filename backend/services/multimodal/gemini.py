@@ -1,418 +1,245 @@
 import os
+import socket
 import time
-
-from dotenv import load_dotenv
 from PIL import Image
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-from services.multimodal.base import BaseModelProvider
 from schemas.multimodal import (
     AnaliseMultimodalInput,
+    RespostaEstruturadaModelo,
     ResultadoProvedor,
-    RespostaEstruturadaModelo
 )
-
+from services.multimodal.base import BaseModelProvider
 
 load_dotenv()
 
 
 class GeminiProvider(BaseModelProvider):
-    """
-    Provedor responsável pela integração real
-    com a API do Gemini.
-    """
-
     MODEL_NAME = "gemini-3.8-flash"
-
     MAX_TENTATIVAS = 3
-
-    DELAYS_RETRY = {
-        1: 2,
-        2: 4
-    }
+    DELAYS_RETRY = (2, 4)
+    TIMEOUT_MS = 45000
 
     def __init__(self):
         super().__init__(
             provider_name="gemini",
-            api_key_env_var="GEMINI_API_KEY"
+            api_key_env_var="GEMINI_API_KEY",
         )
 
-    # ========================================================
-    # PROMPT
-    # ========================================================
+    def _construir_prompt(self, input_data: AnaliseMultimodalInput) -> str:
+        dados = input_data.dados_clinicos
+        tecnica = input_data.analise_tecnica
 
-    def _construir_prompt(
-        self,
-        input_data: AnaliseMultimodalInput
-    ) -> str:
-
-        dados_clinicos = input_data.dados_clinicos
-        analise_tecnica = input_data.analise_tecnica
-
-        prompt = f"""
-Você é um assistente especialista em análise visual descritiva
-de lesões de pele para auxílio em enfermagem.
-
-DIRETRIZES OBRIGATÓRIAS:
-
-1. Esta análise é um apoio descritivo à avaliação profissional
-e não substitui a avaliação, o julgamento ou a decisão do
-profissional de saúde.
-
-2. NÃO emita diagnóstico definitivo.
-
-3. NÃO prescreva tratamentos ou medicamentos.
-
-4. NÃO invente informações, características ou métricas que
-não estejam presentes na imagem ou nos dados fornecidos.
-
-5. Analise descritivamente a fotografia considerando, quando
-visíveis, características gerais do leito da lesão, bordas e
-pele ao redor da lesão, sempre em conjunto com os dados
-fornecidos pelo profissional.
-
-DADOS CLÍNICOS PREENCHIDOS PELO PROFISSIONAL:
-
-- Localização anatômica:
-  {dados_clinicos.localizacao}
-
-- Dimensões informadas:
-  Comprimento: {dados_clinicos.comprimento or 'Não informado'}
-  Largura: {dados_clinicos.largura or 'Não informado'}
-
-- Tipo de exsudato:
-  {dados_clinicos.tipoExsudato or 'Não informado'}
-
-- Presença de odor:
-  {'Sim' if dados_clinicos.odor else 'Não'}
-
-- Nível de dor:
-  {dados_clinicos.nivelDor or 'Não informado'}
-
-- Queixa principal:
-  {dados_clinicos.queixaPrincipal or 'Não informada'}
-
-- Observações complementares:
-  {dados_clinicos.observacoes or 'Nenhuma'}
-
-DADOS TÉCNICOS EXTRAÍDOS DA IMAGEM PELO OPENCV:
-
-- Brilho médio:
-  {analise_tecnica.brilho_medio:.2f}
-
-- Contraste global:
-  {analise_tecnica.contraste_global:.2f}
-
-TAREFA:
-
-Forneça uma descrição objetiva das características visuais
-observáveis na imagem, relacionando-as aos dados fornecidos,
-sem extrapolar informações que não possam ser observadas ou
-confirmadas.
-
-A resposta deve ser estruturada conforme o schema fornecido.
-
-Defina `status_resposta` como "sucesso" quando a análise puder
-ser realizada normalmente.
-
-Em `limitacoes_declaradas`, informe limitações relevantes,
-como iluminação, qualidade da fotografia, enquadramento,
-ausência de informações clínicas ou necessidade de validação
-pelo profissional.
-
-Não apresente a análise como diagnóstico definitivo.
+        return f"""
+Você é um assistente de apoio à documentação de avaliação de feridas
+cutâneas por profissionais de saúde.
+Sua tarefa é descrever características que possam ser observadas na
+fotografia, considerando também as informações clínicas fornecidas.
+REGRAS OBRIGATÓRIAS:
+- Não forneça diagnóstico definitivo.
+- Não prescreva medicamentos ou tratamentos.
+- Não invente características que não estejam visíveis ou informadas.
+- Diferencie observações visuais das informações relatadas pelo profissional.
+- Não determine a causa da ferida apenas pela imagem.
+- Não afirme profundidade, estágio ou fase de cicatrização quando
+- não houver evidências suficientes.
+- Informe limitações relacionadas à qualidade, iluminação ou enquadramento.
+- A análise deve ser validada pelo profissional de saúde responsável.
+- Responda em português brasileiro.
+- Retorne somente os dados compatíveis com o formato estruturado solicitado.
+INFORMAÇÕES CLÍNICAS:
+Localização: {dados.localizacao}
+Comprimento informado: {dados.comprimento or "Não informado"}
+Largura informada: {dados.largura or "Não informado"}
+Tipo de exsudato informado: {dados.tipoExsudato or "Não informado"}
+Odor informado: {"Sim" if dados.odor else "Não informado"}
+Nível de dor informado: {dados.nivelDor or "Não informado"}
+Queixa principal: {dados.queixaPrincipal or "Não informada"}
+Observações: {dados.observacoes or "Nenhuma observação informada"}
+INFORMAÇÕES TÉCNICAS DA IMAGEM:
+Dimensões originais: {input_data.dimensoes_originais}
+Dimensões processadas: {input_data.dimensoes_processadas}
+Brilho médio calculado pelo OpenCV: {tecnica.brilho_medio}
+Contraste global calculated pelo OpenCV: {tecnica.contraste_global}
+Descreva apenas características que possam ser avaliadas com cautela.
+Não interprete os valores técnicos da imagem como indicadores clínicos
+ou como confirmação de uma fase de cicatrização.
 """
 
-        return prompt.strip()
+    def _eh_erro_temporario(self, erro: Exception) -> bool:
+        if isinstance(
+            erro,
+            (TimeoutError, socket.timeout, ConnectionError),
+        ):
+            return True
 
-    # ========================================================
-    # IDENTIFICAÇÃO DE ERROS TEMPORÁRIOS
-    # ========================================================
+        nome_erro = type(erro).__name__.lower()
+        mensagem = str(erro).lower()
 
-    def _eh_erro_temporario(
-        self,
-        erro: Exception
-    ) -> bool:
-
-        mensagem = str(erro).upper()
-
-        indicadores = (
+        marcadores_temporarios = (
+            "timeout",
+            "timed out",
             "503",
-            "UNAVAILABLE",
+            "unavailable",
             "429",
-            "RESOURCE_EXHAUSTED",
-            "HIGH DEMAND",
-            "TOO MANY REQUESTS",
-            "RATE LIMIT"
+            "resource_exhausted",
+            "high demand",
+            "too many requests",
+            "rate limit",
+            "connection reset",
+            "connection error",
+            "internal server error",
         )
 
         return any(
-            indicador in mensagem
-            for indicador in indicadores
-        )
+            marcador in nome_erro for marcador in marcadores_temporarios
+        ) or any(marcador in mensagem for marcador in marcadores_temporarios)
 
-    # ========================================================
-    # EXECUÇÃO DA ANÁLISE
-    # ========================================================
+    def _resultado_falha(
+        self,
+        inicio: float,
+        mensagem: str,
+    ) -> ResultadoProvedor:
+        return ResultadoProvedor(
+            provedor="gemini",
+            modo="api_real",
+            sucesso=False,
+            tempo_execucao_segundos=round(time.time() - inicio, 2),
+            resposta=None,
+            mensagem_erro=mensagem,
+        )
 
     def analisar(
         self,
-        input_data: AnaliseMultimodalInput
+        input_data: AnaliseMultimodalInput,
     ) -> ResultadoProvedor:
-
         inicio = time.time()
-
-        # ====================================================
-        # 1. OBTER API KEY
-        # ====================================================
-
-        api_key = self._obter_api_key()
-
-        if not api_key:
-
-            return ResultadoProvedor(
-                provedor=self.provider_name,
-                modo="api_real",
-                sucesso=False,
-                tempo_execucao_segundos=round(
-                    time.time() - inicio,
-                    3
-                ),
-                resposta=None,
-                mensagem_erro=(
-                    "Chave de API "
-                    "(GEMINI_API_KEY) não configurada "
-                    "no ambiente."
-                )
-            )
-
-        # ====================================================
-        # 2. DEFINIR IMAGEM
-        # ====================================================
-
-        caminho_imagem = (
-            input_data.caminho_imagem_processada
-            or input_data.caminho_imagem_original
-        )
-
-        if not os.path.isfile(caminho_imagem):
-
-            return ResultadoProvedor(
-                provedor=self.provider_name,
-                modo="api_real",
-                sucesso=False,
-                tempo_execucao_segundos=round(
-                    time.time() - inicio,
-                    3
-                ),
-                resposta=None,
-                mensagem_erro=(
-                    "Arquivo de imagem não encontrado "
-                    f"no caminho: {caminho_imagem}"
-                )
-            )
+        cliente = None
+        ultimo_erro = None
 
         try:
+            api_key = os.getenv("GEMINI_API_KEY")
 
-            # =================================================
-            # 3. CRIAR CLIENTE GEMINI
-            # =================================================
-
-            client = genai.Client(
-                api_key=api_key
-            )
-
-            # =================================================
-            # 4. CONSTRUIR PROMPT
-            # =================================================
-
-            prompt_texto = (
-                self._construir_prompt(
-                    input_data
+            if not api_key:
+                return self._resultado_falha(
+                    inicio,
+                    "A variável GEMINI_API_KEY não está configurada.",
                 )
-            )
 
-            # =================================================
-            # 5. CONFIGURAÇÃO DA RESPOSTA
-            # =================================================
+            caminho_imagem = input_data.caminho_imagem_processada
 
-            config_geracao = (
-                types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=(
-                        RespostaEstruturadaModelo
-                    ),
-                    temperature=0.2
+            if not caminho_imagem or not os.path.isfile(caminho_imagem):
+                caminho_imagem = input_data.caminho_imagem_original
+
+            if not caminho_imagem or not os.path.isfile(caminho_imagem):
+                return self._resultado_falha(
+                    inicio,
+                    "Não foi possível localizar o arquivo da imagem.",
                 )
+
+            prompt_texto = self._construir_prompt(input_data)
+
+            http_options = types.HttpOptions(
+                timeout=self.TIMEOUT_MS,
             )
 
-            # =================================================
-            # 6. TENTATIVAS COM RETRY
-            # =================================================
+            cliente = genai.Client(
+                api_key=api_key,
+                http_options=http_options,
+            )
 
-            ultimo_erro = None
+            config_geracao = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=RespostaEstruturadaModelo,
+                temperature=0.2,
+            )
 
-            for tentativa in range(
-                1,
-                self.MAX_TENTATIVAS + 1
-            ):
+            with Image.open(caminho_imagem) as imagem_aberta:
+                imagem = imagem_aberta.copy()
 
-                try:
-
-                    with Image.open(
-                        caminho_imagem
-                    ) as imagem:
-
-                        imagem.load()
-
-                        response = (
-                            client.models
-                            .generate_content(
-                                model=self.MODEL_NAME,
-                                contents=[
-                                    imagem,
-                                    prompt_texto
-                                ],
-                                config=config_geracao
-                            )
+            try:
+                for tentativa in range(self.MAX_TENTATIVAS):
+                    try:
+                        response = cliente.models.generate_content(
+                            model=self.MODEL_NAME,
+                            contents=[imagem, prompt_texto],
+                            config=config_geracao,
                         )
 
-                    # =========================================
-                    # 7. VALIDAR RESPOSTA
-                    # =========================================
+                        if not response or not response.text:
+                            return self._resultado_falha(
+                                inicio,
+                                "O Gemini retornou uma resposta vazia.",
+                            )
 
-                    if not response.text:
+                        resposta_estruturada = (
+                            RespostaEstruturadaModelo.model_validate_json(
+                                response.text
+                            )
+                        )
 
                         return ResultadoProvedor(
-                            provedor=self.provider_name,
+                            provedor="gemini",
                             modo="api_real",
-                            sucesso=False,
+                            sucesso=True,
                             tempo_execucao_segundos=round(
                                 time.time() - inicio,
-                                3
+                                2,
                             ),
-                            resposta=None,
-                            mensagem_erro=(
-                                "A API do Gemini retornou "
-                                "uma resposta vazia."
-                            )
+                            resposta=resposta_estruturada,
+                            mensagem_erro=None,
                         )
 
-                    # =========================================
-                    # 8. VALIDAR JSON COM PYDANTIC
-                    # =========================================
+                    except Exception as erro:
+                        ultimo_erro = erro
 
-                    resposta_estruturada = (
-                        RespostaEstruturadaModelo
-                        .model_validate_json(
-                            response.text
-                        )
-                    )
+                        if (
+                            not self._eh_erro_temporario(erro)
+                            or tentativa >= self.MAX_TENTATIVAS - 1
+                        ):
+                            break
 
-                    # =========================================
-                    # 9. SUCESSO
-                    # =========================================
+                        time.sleep(self.DELAYS_RETRY[tentativa])
 
-                    return ResultadoProvedor(
-                        provedor=self.provider_name,
-                        modo="api_real",
-                        sucesso=True,
-                        tempo_execucao_segundos=round(
-                            time.time() - inicio,
-                            3
-                        ),
-                        resposta=resposta_estruturada,
-                        mensagem_erro=None
-                    )
+            finally:
+                imagem.close()
 
-                except Exception as erro_tentativa:
+            mensagem_erro = str(ultimo_erro or "Erro desconhecido.")
 
-                    ultimo_erro = erro_tentativa
-
-                    # =========================================
-                    # 10. VERIFICAR RETRY
-                    # =========================================
-
-                    erro_temporario = (
-                        self._eh_erro_temporario(
-                            erro_tentativa
-                        )
-                    )
-
-                    ultima_tentativa = (
-                        tentativa
-                        >= self.MAX_TENTATIVAS
-                    )
-
-                    if (
-                        erro_temporario
-                        and not ultima_tentativa
-                    ):
-
-                        tempo_espera = (
-                            self.DELAYS_RETRY
-                            .get(tentativa, 4)
-                        )
-
-                        print(
-                            "Gemini temporariamente "
-                            "indisponível. "
-                            f"Tentativa {tentativa}/"
-                            f"{self.MAX_TENTATIVAS}. "
-                            f"Nova tentativa em "
-                            f"{tempo_espera}s."
-                        )
-
-                        time.sleep(
-                            tempo_espera
-                        )
-
-                        continue
-
-                    # =========================================
-                    # ERRO PERMANENTE OU ÚLTIMA TENTATIVA
-                    # =========================================
-
-                    break
-
-            # =================================================
-            # 11. TODAS AS TENTATIVAS FALHARAM
-            # =================================================
-
-            return ResultadoProvedor(
-                provedor=self.provider_name,
-                modo="api_real",
-                sucesso=False,
-                tempo_execucao_segundos=round(
-                    time.time() - inicio,
-                    3
-                ),
-                resposta=None,
-                mensagem_erro=(
-                    "Erro ao executar análise com Gemini "
-                    f"após {self.MAX_TENTATIVAS} tentativa(s): "
-                    f"{str(ultimo_erro)}"
+            if api_key:
+                mensagem_erro = mensagem_erro.replace(
+                    api_key,
+                    "[CHAVE OCULTADA]",
                 )
+
+            return self._resultado_falha(
+                inicio,
+                (
+                    "Erro ao executar análise com Gemini após "
+                    f"{self.MAX_TENTATIVAS} tentativa(s): {mensagem_erro}"
+                ),
             )
 
         except Exception as erro:
+            mensagem_erro = str(erro)
+            api_key = os.getenv("GEMINI_API_KEY")
 
-            # =================================================
-            # 12. ERRO GERAL
-            # =================================================
-
-            return ResultadoProvedor(
-                provedor=self.provider_name,
-                modo="api_real",
-                sucesso=False,
-                tempo_execucao_segundos=round(
-                    time.time() - inicio,
-                    3
-                ),
-                resposta=None,
-                mensagem_erro=(
-                    "Erro ao executar análise com Gemini: "
-                    f"{str(erro)}"
+            if api_key:
+                mensagem_erro = mensagem_erro.replace(
+                    api_key,
+                    "[CHAVE OCULTADA]",
                 )
+
+            return self._resultado_falha(
+                inicio,
+                f"Falha na integração com Gemini: {mensagem_erro}",
             )
+
+        finally:
+            if cliente is not None:
+                try:
+                    cliente.close()
+                except Exception:
+                    pass
