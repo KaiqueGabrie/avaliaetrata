@@ -25,7 +25,7 @@ class MultimodalOrchestrator:
     o retorno dos resultados dos demais.
     """
 
-    MAX_ESPERA_SEGUNDOS = 70
+    MAX_ESPERA_SEGUNDOS = 135
 
     def __init__(self):
         self._providers: Dict[str, BaseModelProvider] = {
