@@ -1,7 +1,7 @@
 
 import os
 import uuid
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -208,7 +208,7 @@ async def preparar_analise_multimodal(
     nivelDor: str = Form(""),
     queixaPrincipal: str = Form(""),
     observacoes: str = Form(""),
-    provedor: Optional[str] = Form("gemini"),
+    provedor: Literal["gemini", "openai", "kimi", "todos"] = Form("gemini"),
 ):
     """
     Recebe uma imagem e os dados clínicos, executa o OpenCV e solicita
@@ -217,7 +217,8 @@ async def preparar_analise_multimodal(
     Valores aceitos para provedor:
     - gemini: executa somente o Gemini.
     - openai: executa somente a OpenAI.
-    - todos: solicita a execução dos dois provedores.
+    - kimi: executa somente o Kimi.
+    - todos: solicita a execução dos três provedores.
     """
     try:
         provedor_normalizado = (provedor or "gemini").strip().lower()
@@ -225,7 +226,8 @@ async def preparar_analise_multimodal(
         provedores_disponiveis = {
             "gemini": ["gemini"],
             "openai": ["openai"],
-            "todos": ["gemini", "openai"],
+            "kimi": ["kimi"],
+            "todos": ["gemini", "openai", "kimi"],
         }
 
         if provedor_normalizado not in provedores_disponiveis:
@@ -233,7 +235,7 @@ async def preparar_analise_multimodal(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
                     "Provedor inválido. Os valores permitidos são: "
-                    "'gemini', 'openai' ou 'todos'."
+                    "'gemini', 'openai', 'kimi' ou 'todos'."
                 ),
             )
 
