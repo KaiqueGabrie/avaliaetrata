@@ -1,26 +1,34 @@
+
+import json
+import logging
 import os
 import time
 
 from dotenv import load_dotenv
-from PIL import Image
 from google import genai
 from google.genai import types
+from PIL import Image
 
-from services.multimodal.base import BaseModelProvider
 from schemas.multimodal import (
     AnaliseMultimodalInput,
     ResultadoProvedor,
-    RespostaEstruturadaModelo,
+)
+from services.multimodal.base import BaseModelProvider
+from services.multimodal.prompt_padrao import (
+    construir_prompt,
+    normalizar_resposta,
 )
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 
 class GeminiProvider(BaseModelProvider):
-    """Integração multimodal com a API do Google Gemini."""
-
-    MODEL_NAME = "gemini-3.8-flash"
-    TIMEOUT_MILISSEGUNDOS = 120_000
+    """
+    Integração Gemini para o Avalia & Trata.
+    Mantém o contrato utilizado pelo orchestrator.py.
+    """
 
     def __init__(self):
         super().__init__(
@@ -28,268 +36,197 @@ class GeminiProvider(BaseModelProvider):
             api_key_env_var="GEMINI_API_KEY",
         )
 
-    def _resultado_falha(
-        self,
-        inicio: float,
-        mensagem: str,
-    ) -> ResultadoProvedor:
-        return ResultadoProvedor(
-            provedor=self.provider_name,
-            modo="api_real",
-            sucesso=False,
-            tempo_execucao_segundos=round(
-                time.monotonic() - inicio, 3
-            ),
-            resposta=None,
-            mensagem_erro=mensagem,
-        )
-
-    def _construir_prompt(
-        self,
-        input_data: AnaliseMultimodalInput,
-    ) -> str:
-        dados = input_data.dados_clinicos
-        tecnica = input_data.analise_tecnica
-
-        odor_informado = (
-            "Sim"
-            if dados.odor
-            else "Não ou não informado no formulário"
-        )
-
-        return f"""
-Você é um assistente de apoio à documentação clínica de feridas
-cutâneas, destinado a apoiar o trabalho de profissionais de saúde.
-
-OBJETIVO:
-Descrever características visuais da fotografia e organizar as
-informações fornecidas pelo profissional. Esta análise não substitui
-a avaliação presencial nem o julgamento clínico.
-
-REGRAS OBRIGATÓRIAS:
-- Não forneça diagnóstico definitivo.
-- Não prescreva medicamentos, tratamentos ou condutas.
-- Não invente características, medidas ou informações.
-- Diferencie o que é observável na fotografia do que foi informado
-  pelo profissional.
-- Descreva somente características que possam ser observadas com
-  segurança, como o aspecto visível do leito, as bordas e a pele
-  ao redor da ferida.
-- Não determine a fase de cicatrização, a causa, a profundidade real
-  ou a presença de infecção somente pela fotografia.
-- Não interprete brilho ou contraste global como indicadores clínicos.
-- Não afirme que a área da ferida foi calculada automaticamente.
-- Comprimento e largura são medidas informadas pelo profissional,
-  não medidas extraídas automaticamente pela IA.
-- Considere possíveis limitações de iluminação, foco, distância,
-  enquadramento e qualidade da imagem.
-- Se não for possível avaliar alguma característica, informe essa
-  limitação em vez de adivinhar.
-- A análise deve ser validada por um profissional de saúde.
-- Responda em português brasileiro.
-
-FORMATO OBRIGATÓRIO:
-Retorne uma resposta estruturada com estes campos:
-- status_resposta: string
-- conteudo_descricao: string
-- limitacoes_declaradas: lista de strings
-
-DADOS CLÍNICOS INFORMADOS:
-
-Localização anatômica: {dados.localizacao}
-Comprimento informado (cm): {dados.comprimento or "Não informado"}
-Largura informada (cm): {dados.largura or "Não informado"}
-Tipo de exsudato: {dados.tipoExsudato or "Não informado"}
-Presença de odor: {odor_informado}
-Nível de dor: {dados.nivelDor or "Não informado"}
-Queixa principal: {dados.queixaPrincipal or "Não informada"}
-Observações complementares: {dados.observacoes or "Nenhuma"}
-
-DADOS TÉCNICOS DA IMAGEM:
-
-Dimensões originais: {input_data.dimensoes_originais}
-Dimensões processadas: {input_data.dimensoes_processadas}
-Brilho médio calculado pelo OpenCV: {tecnica.brilho_medio}
-Contraste global calculado pelo OpenCV: {tecnica.contraste_global}
-
-Descreva somente o que puder ser observado com cautela.
-Diferencie observações visuais de informações do formulário.
-Não invente dados ausentes.
-""".strip()
-
     @staticmethod
-    def _mensagem_erro(erro: Exception) -> str:
-        texto = str(erro)
-        texto_upper = texto.upper()
+    def _codigo_http(erro):
+        codigo = getattr(erro, "code", None)
 
-        if (
-            "HIGH DEMAND" in texto_upper
-            or "UNAVAILABLE" in texto_upper
-            or "503" in texto_upper
-        ):
-            return (
-                "O Gemini está temporariamente indisponível "
-                "ou com alta demanda. Nenhuma nova tentativa "
-                "automática será feita nesta chamada. "
-                "Tente novamente mais tarde."
-            )
+        if codigo is None:
+            codigo = getattr(erro, "status_code", None)
 
-        if (
-            "DEADLINE_EXCEEDED" in texto_upper
-            or "504" in texto_upper
-            or "TIMED OUT" in texto_upper
-            or "TIMEOUT" in texto_upper
-        ):
-            return (
-                "O Gemini excedeu o tempo limite de processamento. "
-                "Isso pode ocorrer por demora do serviço ou da conexão."
-            )
+        try:
+            return int(codigo)
+        except (TypeError, ValueError):
+            texto = str(erro).upper()
 
-        if (
-            "RESOURCE_EXHAUSTED" in texto_upper
-            or "429" in texto_upper
-            or "RATE LIMIT" in texto_upper
-        ):
-            return (
-                "O Gemini recusou a solicitação por limite de utilização. "
-                "Verifique as cotas e o uso da API no projeto Google."
-            )
+            for numero in (400, 401, 403, 404, 429, 503, 504):
+                if str(numero) in texto:
+                    return numero
 
-        if (
-            "PERMISSION_DENIED" in texto_upper
-            or "403" in texto_upper
-            or "API KEY" in texto_upper
-            or "INVALID_ARGUMENT" in texto_upper
-        ):
-            return (
-                "O Gemini recusou a solicitação. Verifique a chave da API, "
-                "as permissões do projeto e os parâmetros enviados."
-            )
-
-        if "NOT_FOUND" in texto_upper or "404" in texto_upper:
-            return (
-                "O modelo ou recurso do Gemini não foi encontrado. "
-                "Verifique o identificador do modelo e sua disponibilidade."
-            )
-
-        return f"Erro ao executar análise com Gemini: {texto[:700]}"
+            return None
 
     def analisar(
         self,
         input_data: AnaliseMultimodalInput,
     ) -> ResultadoProvedor:
+
         inicio = time.monotonic()
-        api_key = self._obter_api_key()
-        cliente = None
+        chave = self._obter_api_key()
+
+        modelo = os.getenv(
+            "GEMINI_MODEL",
+            "gemini-3.8-flash",
+        )
+
+        timeout_ms = int(
+            os.getenv("GEMINI_TIMEOUT_MS", "30000")
+        )
+
+        def retornar(
+            sucesso=False,
+            resposta=None,
+            erro=None,
+        ):
+            return ResultadoProvedor(
+                provedor="gemini",
+                modo="api_real",
+                sucesso=sucesso,
+                tempo_execucao_segundos=round(
+                    time.monotonic() - inicio,
+                    3,
+                ),
+                resposta=resposta,
+                mensagem_erro=erro,
+            )
+
+        if not chave:
+            return retornar(
+                erro="GEMINI_API_KEY não configurada."
+            )
 
         try:
-            if not api_key:
-                return self._resultado_falha(
-                    inicio,
-                    "A variável GEMINI_API_KEY não está configurada.",
+            caminho = input_data.caminho_imagem_processada
+
+            if not os.path.isfile(caminho):
+                caminho = input_data.caminho_imagem_original
+
+            if not os.path.isfile(caminho):
+                return retornar(
+                    erro="Gemini: imagem não encontrada."
                 )
 
-            # Prioriza a imagem original para preservar
-            # as características visuais da fotografia.
-            caminho_original = input_data.caminho_imagem_original
-            caminho_processado = input_data.caminho_imagem_processada
+            prompt = construir_prompt(input_data)
 
-            if (
-                caminho_original
-                and os.path.isfile(caminho_original)
-            ):
-                caminho_imagem = caminho_original
-            elif (
-                caminho_processado
-                and os.path.isfile(caminho_processado)
-            ):
-                caminho_imagem = caminho_processado
-            else:
-                return self._resultado_falha(
-                    inicio,
-                    "Não foi possível localizar a imagem original "
-                    "nem a imagem processada.",
-                )
+            with Image.open(caminho) as arquivo:
+                imagem = arquivo.copy()
+                imagem.load()
 
-            prompt = self._construir_prompt(input_data)
+            logger.info(
+                "Gemini: modelo=%s, timeout=%sms",
+                modelo,
+                timeout_ms,
+            )
 
-            # Uma tentativa configurada no cliente para evitar
-            # repetições automáticas excessivas em caso de erro.
-            cliente = genai.Client(
-                api_key=api_key,
+            with genai.Client(
+                api_key=chave,
                 http_options=types.HttpOptions(
-                    timeout=self.TIMEOUT_MILISSEGUNDOS,
+                    timeout=timeout_ms,
                     retry_options=types.HttpRetryOptions(
                         attempts=1,
                     ),
                 ),
-            )
+            ) as cliente:
 
-            with Image.open(caminho_imagem) as imagem:
-                imagem.load()
+                for tentativa in range(1, 3):
+                    try:
+                        logger.info(
+                            "Gemini: tentativa %s/2",
+                            tentativa,
+                        )
 
-                resposta = cliente.models.generate_content(
-                    model=self.MODEL_NAME,
-                    contents=[
-                        prompt,
-                        imagem.copy(),
-                    ],
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=RespostaEstruturadaModelo,
-                        temperature=0.2,
-                    ),
-                )
+                        resultado = (
+                            cliente.models.generate_content(
+                                model=modelo,
+                                contents=[
+                                    prompt,
+                                    imagem,
+                                ],
+                                config=types.GenerateContentConfig(
+                                    response_mime_type="application/json",
+                                    temperature=0.2,
+                                    max_output_tokens=2600,
+                                ),
+                            )
+                        )
 
-            if not resposta.text:
-                return self._resultado_falha(
-                    inicio,
-                    "O Gemini retornou uma resposta vazia.",
-                )
+                        if not resultado.text:
+                            return retornar(
+                                erro="Gemini retornou conteúdo vazio."
+                            )
 
-            resultado = (
-                RespostaEstruturadaModelo.model_validate_json(
-                    resposta.text
-                )
-            )
+                        dados = json.loads(resultado.text)
 
-            if not resultado.conteudo_descricao.strip():
-                return self._resultado_falha(
-                    inicio,
-                    "O Gemini retornou uma descrição vazia.",
-                )
+                        resposta = normalizar_resposta(
+                            dados,
+                            input_data,
+                        )
 
-            resultado.status_resposta = "sucesso"
+                        logger.info(
+                            "Gemini concluído em %.2fs",
+                            time.monotonic() - inicio,
+                        )
 
-            return ResultadoProvedor(
-                provedor=self.provider_name,
-                modo="api_real",
-                sucesso=True,
-                tempo_execucao_segundos=round(
-                    time.monotonic() - inicio, 3
-                ),
-                resposta=resultado,
-                mensagem_erro=None,
-            )
+                        return retornar(
+                            sucesso=True,
+                            resposta=resposta,
+                        )
+
+                    except Exception as erro:
+                        codigo = self._codigo_http(erro)
+
+                        logger.warning(
+                            "Gemini: tentativa %s, erro=%s, HTTP=%s",
+                            tentativa,
+                            type(erro).__name__,
+                            codigo,
+                        )
+
+                        if (
+                            codigo not in (503, 504)
+                            or tentativa == 2
+                        ):
+                            raise
+
+                        time.sleep(2)
 
         except Exception as erro:
-            mensagem = self._mensagem_erro(erro)
+            codigo = self._codigo_http(erro)
 
-            # Não expõe a chave em mensagens de erro.
-            if api_key:
-                mensagem = mensagem.replace(
-                    api_key,
-                    "[CHAVE OCULTADA]",
-                )
-
-            return self._resultado_falha(
-                inicio,
-                mensagem,
+            logger.exception(
+                "Gemini: falha no modelo %s",
+                modelo,
             )
 
-        finally:
-            if cliente is not None:
-                try:
-                    cliente.close()
-                except Exception:
-                    pass
+            if codigo == 503:
+                mensagem = (
+                    "Gemini: servidor temporariamente "
+                    "sobrecarregado (503)."
+                )
+            elif codigo == 504:
+                mensagem = (
+                    "Gemini: tempo limite do servidor "
+                    "excedido (504)."
+                )
+            elif codigo == 429:
+                mensagem = (
+                    "Gemini: limite de requisições "
+                    "ou cota atingida (429)."
+                )
+            elif codigo == 404:
+                mensagem = (
+                    f"Gemini: modelo '{modelo}' "
+                    "não encontrado ou indisponível."
+                )
+            elif codigo in (401, 403):
+                mensagem = (
+                    "Gemini: chave inválida "
+                    "ou sem permissão."
+                )
+            elif isinstance(erro, json.JSONDecodeError):
+                mensagem = "Gemini retornou JSON inválido."
+            else:
+                mensagem = (
+                    "Gemini: erro na API ou validação. "
+                    f"Tipo: {type(erro).__name__}."
+                )
+
+            return retornar(erro=mensagem)

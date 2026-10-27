@@ -1,4 +1,3 @@
-
 import concurrent.futures
 import time
 from datetime import datetime
@@ -18,11 +17,10 @@ from services.multimodal.kimi import KimiProvider
 
 class MultimodalOrchestrator:
     """
-    Coordena a execução dos provedores multimodais.
+    Executa provedores multimodais em paralelo.
 
-    Cada provedor é executado de forma independente.
-    Uma falha ou demora de um provedor não deve impedir
-    o retorno dos resultados dos demais.
+    A falha de um provedor não deve impedir o retorno
+    dos resultados dos outros.
     """
 
     MAX_ESPERA_SEGUNDOS = 135
@@ -33,6 +31,22 @@ class MultimodalOrchestrator:
             "openai": OpenAIProvider(),
             "kimi": KimiProvider(),
         }
+
+    @staticmethod
+    def _falha(
+        nome: str,
+        mensagem: str,
+        tempo: float = 0.0,
+        modo: str = "erro",
+    ) -> ResultadoProvedor:
+        return ResultadoProvedor(
+            provedor=nome,
+            modo=modo,
+            sucesso=False,
+            tempo_execucao_segundos=round(tempo, 3),
+            resposta=None,
+            mensagem_erro=mensagem,
+        )
 
     def executar_analise_comparativa(
         self,
@@ -47,10 +61,20 @@ class MultimodalOrchestrator:
                 "kimi",
             ]
 
-        # Remove nomes repetidos, preservando a ordem.
-        provedores_desejados = list(dict.fromkeys(provedores_desejados))
+        # Remove nomes repetidos sem alterar a ordem.
+        provedores_desejados = list(
+            dict.fromkeys(provedores_desejados)
+        )
 
         resultados_finais: Dict[str, ResultadoProvedor] = {}
+
+        # Informa explicitamente os nomes desconhecidos.
+        for nome in provedores_desejados:
+            if nome not in self._providers:
+                resultados_finais[nome] = self._falha(
+                    nome,
+                    f"Provedor '{nome}' não está configurado.",
+                )
 
         provedores_para_executar = [
             self._providers[nome]
@@ -62,9 +86,10 @@ class MultimodalOrchestrator:
             return ResultadoAnaliseMultimodal(
                 sucesso_geral=False,
                 data_processamento=datetime.now().isoformat(),
-                resultados={},
+                resultados=resultados_finais,
             )
 
+        inicio_geral = time.monotonic()
         executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=len(provedores_para_executar)
         )
@@ -73,80 +98,78 @@ class MultimodalOrchestrator:
         future_to_provider = {}
 
         try:
-            # Inicia os provedores de forma concorrente.
+            # Inicia os provedores concorrentemente.
             for provedor in provedores_para_executar:
-                inicio_por_provedor[provedor.provider_name] = time.monotonic()
+                nome = provedor.provider_name
+                inicio_por_provedor[nome] = time.monotonic()
 
                 future = executor.submit(
                     provedor.analisar,
                     input_data,
                 )
 
-                future_to_provider[future] = provedor.provider_name
+                future_to_provider[future] = nome
 
-            # Espera somente até o limite definido.
             concluidas, pendentes = concurrent.futures.wait(
                 future_to_provider.keys(),
                 timeout=self.MAX_ESPERA_SEGUNDOS,
                 return_when=concurrent.futures.ALL_COMPLETED,
             )
 
-            # Registra os resultados que terminaram.
+            # Processa as chamadas concluídas.
             for future in concluidas:
-                nome_provedor = future_to_provider[future]
+                nome = future_to_provider[future]
+                tempo = (
+                    time.monotonic()
+                    - inicio_por_provedor[nome]
+                )
 
                 try:
-                    resultado_provedor = future.result()
+                    resultado = future.result()
 
-                    resultados_finais[nome_provedor] = resultado_provedor
+                    if not isinstance(resultado, ResultadoProvedor):
+                        resultados_finais[nome] = self._falha(
+                            nome,
+                            "O provedor retornou um resultado "
+                            "em formato inesperado.",
+                            tempo,
+                        )
+                    else:
+                        resultados_finais[nome] = resultado
 
                 except Exception as erro:
-                    resultados_finais[nome_provedor] = ResultadoProvedor(
-                        provedor=nome_provedor,
-                        modo="erro",
-                        sucesso=False,
-                        tempo_execucao_segundos=round(
-                            time.monotonic()
-                            - inicio_por_provedor[nome_provedor],
-                            3,
-                        ),
-                        resposta=None,
-                        mensagem_erro=(
-                            "Erro inesperado durante a execução: "
-                            f"{str(erro)}"
-                        ),
+                    resultados_finais[nome] = self._falha(
+                        nome,
+                        "Erro inesperado durante a execução: "
+                        f"{type(erro).__name__}: {erro}",
+                        tempo,
                     )
 
-            # Registra falhas por tempo excedido sem esperar indefinidamente.
+            # Registra provedores que excederam o limite geral.
             for future in pendentes:
-                nome_provedor = future_to_provider[future]
+                nome = future_to_provider[future]
+                tempo = (
+                    time.monotonic()
+                    - inicio_por_provedor[nome]
+                )
 
-                resultados_finais[nome_provedor] = ResultadoProvedor(
-                    provedor=nome_provedor,
+                resultados_finais[nome] = self._falha(
+                    nome,
+                    "O provedor excedeu o limite geral de espera "
+                    f"de {self.MAX_ESPERA_SEGUNDOS} segundos. "
+                    "Verifique o timeout individual, a conexão "
+                    "e a disponibilidade da API.",
+                    tempo,
                     modo="timeout",
-                    sucesso=False,
-                    tempo_execucao_segundos=round(
-                        time.monotonic()
-                        - inicio_por_provedor[nome_provedor],
-                        3,
-                    ),
-                    resposta=None,
-                    mensagem_erro=(
-                        "O provedor excedeu o limite de espera de "
-                        f"{self.MAX_ESPERA_SEGUNDOS} segundos. "
-                        "Verifique a conexão, a disponibilidade da API "
-                        "e a configuração de timeout do provedor."
-                    ),
                 )
 
                 # Cancela tarefas que ainda não começaram.
-                # Uma tarefa já em execução não pode ser interrompida
-                # à força pelo Future.cancel().
+                # Uma chamada já em execução não pode ser interrompida
+                # à força por Future.cancel().
                 future.cancel()
 
         finally:
-            # Não bloqueia a resposta HTTP esperando uma tarefa pendente.
-            # Os timeouts dos próprios provedores também devem estar ativos.
+            # Não bloqueia o retorno esperando tarefas pendentes.
             executor.shutdown(
                 wait=False,
                 cancel_futures=True,
@@ -162,4 +185,3 @@ class MultimodalOrchestrator:
             data_processamento=datetime.now().isoformat(),
             resultados=resultados_finais,
         )
-

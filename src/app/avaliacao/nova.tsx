@@ -1,3 +1,4 @@
+
 import { useState } from 'react';
 import {
   ActivityIndicator,
@@ -5,7 +6,6 @@ import {
   Image,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -18,48 +18,25 @@ import { useLocalSearchParams } from 'expo-router';
 import { fetch as expoFetch } from 'expo/fetch';
 
 import { API_URL } from '../../config/api';
+import {
+  RespostaEstruturadaIA,
+  ResultadoProvedorIA,
+} from '../../types/ia';
 
 type Provedor = 'gemini' | 'openai' | 'kimi' | 'todos';
 
-type ResultadoProvedor = {
-  provedor?: string;
-  modo?: string;
-  sucesso?: boolean;
-  tempo_execucao_segundos?: number;
-  mensagem_erro?: string | null;
-  resposta?: {
-    status_resposta?: string;
-    conteudo_descricao?: string;
-    limitacoes_declaradas?: string[];
-  };
-};
-
-type RespostaAnalise = {
-  sucesso?: boolean;
-  mensagem?: string;
-  provedor_selecionado?: string;
-  provedores_solicitados?: string[];
-  imagem_original_url?: string;
+type RespostaAPI = {
+  sucesso: boolean;
+  mensagem: string;
   imagem_processada_url?: string;
-  dimensoes_originais?: {
-    largura_pixels?: number;
-    altura_pixels?: number;
-    canais?: number;
-    total_pixels?: number;
-  };
-  dimensoes_processadas?: {
-    largura_pixels?: number;
-    altura_pixels?: number;
-  };
   analise_tecnica?: {
     brilho_medio?: number;
     contraste_global?: number;
   };
-  dados_clinicos?: Record<string, unknown>;
   analise_multimodal?: {
-    sucesso_geral?: boolean;
-    data_processamento?: string;
-    resultados?: Record<string, ResultadoProvedor>;
+    sucesso_geral: boolean;
+    data_processamento: string;
+    resultados: Record<string, ResultadoProvedorIA>;
   };
 };
 
@@ -70,1225 +47,885 @@ const PROVEDORES: { valor: Provedor; titulo: string }[] = [
   { valor: 'kimi', titulo: 'Kimi' },
 ];
 
+const TIMES = [
+  ['T', 'Tecido'],
+  ['I', 'Inflamação / Infecção'],
+  ['M', 'Umidade'],
+  ['E', 'Bordas'],
+  ['S', 'Pele ao redor'],
+];
+
+function Lista({
+  titulo,
+  itens,
+}: {
+  titulo?: string;
+  itens?: string[];
+}) {
+  if (!itens?.length) return null;
+
+  return (
+    <View style={styles.grupo}>
+      {titulo ? <Text style={styles.rotulo}>{titulo}</Text> : null}
+      {itens.map((item, indice) => (
+        <Text key={indice} style={styles.texto}>
+          {'\u2022'} {item}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
+function Secao({
+  titulo,
+  children,
+}: {
+  titulo: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={styles.secaoInterna}>
+      <Text style={styles.subtitulo}>{titulo}</Text>
+      {children}
+    </View>
+  );
+}
+
+function Campo({
+  titulo,
+  valor,
+  alterar,
+  multiline = false,
+  placeholder,
+}: {
+  titulo: string;
+  valor: string;
+  alterar: (valor: string) => void;
+  multiline?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <View style={styles.grupo}>
+      <Text style={styles.rotulo}>{titulo}</Text>
+      <TextInput
+        style={[styles.input, multiline && styles.multiline]}
+        value={valor}
+        onChangeText={alterar}
+        multiline={multiline}
+        placeholder={placeholder}
+        keyboardType="default"
+      />
+    </View>
+  );
+}
+
+function ResultadoEstruturado({
+  resposta,
+}: {
+  resposta: RespostaEstruturadaIA;
+}) {
+  const tecidos = resposta.avaliacao_tecidos;
+  const marcacoes = resposta.marcacoes_imagem;
+  const plano = resposta.plano_cuidados_proposto;
+
+  return (
+    <View>
+      <Secao titulo="Descrição geral">
+        <Text style={styles.texto}>
+          {resposta.conteudo_descricao || 'Não informada.'}
+        </Text>
+      </Secao>
+
+      <Secao titulo="Qualidade da fotografia">
+        <Text style={styles.texto}>
+          Estado: {resposta.qualidade_imagem?.status || 'Não avaliado'}
+        </Text>
+        <Lista itens={resposta.qualidade_imagem?.observacoes} />
+        <Lista
+          titulo="Limitações"
+          itens={resposta.qualidade_imagem?.limitacoes}
+        />
+      </Secao>
+
+      <Secao titulo="Características visuais">
+        {resposta.caracteristicas_visuais?.length ? (
+          resposta.caracteristicas_visuais.map((item, indice) => (
+            <View key={indice} style={styles.bloco}>
+              <Text style={styles.rotulo}>{item.caracteristica}</Text>
+              <Text style={styles.texto}>{item.descricao}</Text>
+              <Text style={styles.textoMenor}>
+                Avaliação: {item.status}
+                {item.confianca_autodeclarada
+                  ? ` | Confiança declarada: ${item.confianca_autodeclarada}`
+                  : ''}
+              </Text>
+              {item.justificativa ? (
+                <Text style={styles.textoMenor}>
+                  {item.justificativa}
+                </Text>
+              ) : null}
+            </View>
+          ))
+        ) : (
+          <Text style={styles.textoMenor}>
+            Sem características estruturadas disponíveis.
+          </Text>
+        )}
+      </Secao>
+
+      <Secao titulo="Avaliação T.I.M.E.S.">
+        {TIMES.map(([letra, titulo]) => {
+          const componente = resposta.avaliacao_times?.find(
+            (item) => item.componente === letra,
+          );
+
+          return (
+            <View key={letra} style={styles.bloco}>
+              <Text style={styles.rotulo}>
+                {letra} — {titulo}
+              </Text>
+              <Text style={styles.textoMenor}>
+                Estado: {componente?.status || 'Não avaliado'}
+              </Text>
+              <Lista
+                titulo="Observações visuais"
+                itens={componente?.observacoes_visuais}
+              />
+              <Lista
+                titulo="Dados clínicos relacionados"
+                itens={componente?.dados_clinicos_relacionados}
+              />
+              <Lista
+                titulo="Informações pendentes"
+                itens={componente?.informacoes_pendentes}
+              />
+              <Lista
+                titulo="Limitações"
+                itens={componente?.limitacoes}
+              />
+            </View>
+          );
+        })}
+      </Secao>
+
+      <Secao titulo="Caracterização dos tecidos">
+        <Text style={styles.textoMenor}>
+          Estado: {tecidos?.status || 'Não avaliado'}
+        </Text>
+
+        {tecidos?.tecidos?.length ? (
+          tecidos.tecidos.map((tecido, indice) => (
+            <View key={indice} style={styles.bloco}>
+              <Text style={styles.rotulo}>{tecido.tipo}</Text>
+              <Text style={styles.texto}>
+                {tecido.descricao_visual}
+              </Text>
+              <Text style={styles.texto}>
+                Percentual estimado:{' '}
+                {tecido.percentual_estimado == null
+                  ? 'Não estimado'
+                  : `${tecido.percentual_estimado}%`}
+              </Text>
+              <Text style={styles.textoMenor}>
+                Confiança declarada:{' '}
+                {tecido.confianca_autodeclarada || 'Não informada'}
+              </Text>
+              {tecido.justificativa ? (
+                <Text style={styles.textoMenor}>
+                  {tecido.justificativa}
+                </Text>
+              ) : null}
+            </View>
+          ))
+        ) : (
+          <Text style={styles.textoMenor}>
+            Nenhuma classificação visual de tecido disponível.
+          </Text>
+        )}
+
+        <Lista itens={tecidos?.limitacoes} />
+      </Secao>
+
+      <Secao titulo="Medidas da lesão">
+        <Text style={styles.texto}>
+          Comprimento informado:{' '}
+          {resposta.medidas?.comprimento_informado_cm || '—'} cm
+        </Text>
+        <Text style={styles.texto}>
+          Largura informada:{' '}
+          {resposta.medidas?.largura_informada_cm || '—'} cm
+        </Text>
+        <Text style={styles.texto}>
+          Área calculada:{' '}
+          {resposta.medidas?.area_calculada_cm2 == null
+            ? 'Não calculada'
+            : `${resposta.medidas.area_calculada_cm2} cm²`}
+        </Text>
+        <Text style={styles.textoMenor}>
+          Método: {resposta.medidas?.metodo_medicao || 'Não informado'}
+        </Text>
+        <Lista itens={resposta.medidas?.observacoes} />
+      </Secao>
+
+      <Secao titulo="Regiões identificadas na imagem">
+        <Text style={styles.textoMenor}>
+          Coordenadas normalizadas de 0 a 1, referentes à
+          imagem processada. Ainda não representam segmentação
+          validada.
+        </Text>
+
+        {marcacoes?.regioes?.length ? (
+          marcacoes.regioes.map((regiao, indice) => (
+            <View key={indice} style={styles.bloco}>
+              <Text style={styles.rotulo}>{regiao.rotulo}</Text>
+              <Text style={styles.texto}>{regiao.descricao}</Text>
+              <Text style={styles.textoMenor}>
+                Pontos: {regiao.pontos?.length || 0}
+              </Text>
+              {regiao.pontos?.map((ponto, i) => (
+                <Text key={i} style={styles.textoMenor}>
+                  {i + 1}: x={ponto.x.toFixed(3)}, y={ponto.y.toFixed(3)}
+                </Text>
+              ))}
+            </View>
+          ))
+        ) : (
+          <Text style={styles.textoMenor}>
+            Nenhuma região delimitada com confiança suficiente.
+          </Text>
+        )}
+
+        <Lista itens={marcacoes?.limitacoes} />
+      </Secao>
+
+      <Secao titulo="Plano de cuidados — rascunho para revisão">
+        {plano?.sugestoes?.length ? (
+          plano.sugestoes.map((sugestao, indice) => (
+            <View key={indice} style={styles.bloco}>
+              <Text style={styles.rotulo}>{sugestao.titulo}</Text>
+              <Text style={styles.texto}>
+                {sugestao.justificativa}
+              </Text>
+              <Lista
+                titulo="Dados a confirmar"
+                itens={sugestao.dados_a_confirmar}
+              />
+            </View>
+          ))
+        ) : (
+          <Text style={styles.textoMenor}>
+            Nenhum tópico adicional foi proposto.
+          </Text>
+        )}
+        <Lista itens={plano?.observacoes} />
+      </Secao>
+
+      <Secao titulo="Pontos para revisão profissional">
+        <Lista itens={resposta.pontos_para_revisao_profissional} />
+      </Secao>
+
+      <Secao titulo="Limitações gerais">
+        <Lista itens={resposta.limitacoes_declaradas} />
+      </Secao>
+    </View>
+  );
+}
+
 export default function NovaAvaliacaoScreen() {
   const { pacienteId } = useLocalSearchParams<{
     pacienteId?: string;
   }>();
 
-  // Identificação do paciente.
-  // Posteriormente, podemos buscar esses dados no cadastro real.
-  const nomePacienteMock = 'Maria Silva Santos (Fictício)';
-
-  // Dados clínicos.
   const [localizacao, setLocalizacao] = useState('');
   const [comprimento, setComprimento] = useState('');
   const [largura, setLargura] = useState('');
   const [tipoExsudato, setTipoExsudato] = useState('');
-  const [odor, setOdor] = useState(false);
+  const [odor, setOdor] = useState<'sim' | 'nao' | ''>('');
   const [nivelDor, setNivelDor] = useState('');
   const [queixaPrincipal, setQueixaPrincipal] = useState('');
   const [observacoes, setObservacoes] = useState('');
 
-  // Fotografia.
   const [imagemUri, setImagemUri] = useState<string | null>(null);
-
-  // Provedor selecionado.
   const [provedor, setProvedor] = useState<Provedor>('todos');
-
-  // Resposta da API.
-  const [resultado, setResultado] = useState<RespostaAnalise | null>(null);
-  const [imagemProcessadaUrl, setImagemProcessadaUrl] =
-    useState<string | null>(null);
-
-  // Estados de carregamento.
+  const [resultado, setResultado] = useState<RespostaAPI | null>(null);
   const [carregando, setCarregando] = useState(false);
-  const [testandoConexao, setTestandoConexao] = useState(false);
-  const [statusApi, setStatusApi] = useState<string | null>(null);
+  const [statusApi, setStatusApi] = useState('');
 
-  // ============================================================
-  // TESTAR CONEXÃO COM O BACK-END
-  // ============================================================
+  const [provedorEscolhido, setProvedorEscolhido] = useState('');
+  const [revisao, setRevisao] = useState('');
+  const [validado, setValidado] = useState(false);
 
-  const handleTestarConexao = async () => {
-    setTestandoConexao(true);
-    setStatusApi('Testando conexão com o back-end...');
+  const resultados = resultado?.analise_multimodal?.resultados || {};
 
-    try {
-      const response = await expoFetch(`${API_URL}/`, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`O servidor respondeu com HTTP ${response.status}.`);
-      }
-
-      const data = await response.json();
-
-      setStatusApi('Conexão com o back-end estabelecida.');
-
-      Alert.alert(
-        'Conexão estabelecida',
-        data.message || data.status || 'O servidor está respondendo.',
-      );
-    } catch (error: unknown) {
-      const mensagem =
-        error instanceof Error ? error.message : 'Erro desconhecido.';
-
-      setStatusApi('Não foi possível conectar ao back-end.');
-
-      Alert.alert(
-        'Falha na conexão',
-        `${mensagem}\n\nVerifique se o Python está executando e se o celular consegue acessar o endereço configurado em API_URL.`,
-      );
-    } finally {
-      setTestandoConexao(false);
-    }
-  };
-
-  // ============================================================
-  // LIMPAR RESULTADOS ANTERIORES
-  // ============================================================
-
-  const limparResultado = () => {
+  const limpar = () => {
     setResultado(null);
-    setImagemProcessadaUrl(null);
-    setStatusApi(null);
+    setProvedorEscolhido('');
+    setRevisao('');
+    setValidado(false);
   };
 
-  // ============================================================
-  // TIRAR FOTOGRAFIA
-  // ============================================================
-
-  const handleTirarFoto = async () => {
+  const selecionarImagem = async (camera: boolean) => {
     try {
-      const permissao =
-        await ImagePicker.requestCameraPermissionsAsync();
+      const permissao = camera
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
 
       if (!permissao.granted) {
-        Alert.alert(
-          'Permissão necessária',
-          'Permita o acesso à câmera para fotografar a lesão.',
-        );
+        Alert.alert('Permissão necessária', 'Autorize o acesso à imagem.');
         return;
       }
 
-      const selecao = await ImagePicker.launchCameraAsync({
-        mediaTypes: ['images'],
-        allowsEditing: true,
-        quality: 0.8,
-      });
+      const selecao = camera
+        ? await ImagePicker.launchCameraAsync({
+            mediaTypes: ['images'],
+            quality: 0.8,
+            allowsEditing: true,
+          })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'],
+            quality: 0.8,
+            allowsEditing: true,
+          });
 
       if (!selecao.canceled && selecao.assets[0]?.uri) {
         setImagemUri(selecao.assets[0].uri);
-        limparResultado();
+        limpar();
       }
-    } catch (error: unknown) {
-      const mensagem =
-        error instanceof Error ? error.message : 'Erro desconhecido.';
-
-      Alert.alert('Erro ao abrir a câmera', mensagem);
+    } catch (erro) {
+      Alert.alert(
+        'Erro na imagem',
+        erro instanceof Error ? erro.message : 'Erro desconhecido',
+      );
     }
   };
 
-  // ============================================================
-  // SELECIONAR FOTOGRAFIA DA GALERIA
-  // ============================================================
-
-  const handleEscolherGaleria = async () => {
+  const testarConexao = async () => {
     try {
-      const permissao =
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
-
-      if (!permissao.granted) {
-        Alert.alert(
-          'Permissão necessária',
-          'Permita o acesso à galeria para selecionar uma fotografia.',
-        );
-        return;
-      }
-
-      const selecao = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: true,
-        quality: 0.8,
-      });
-
-      if (!selecao.canceled && selecao.assets[0]?.uri) {
-        setImagemUri(selecao.assets[0].uri);
-        limparResultado();
-      }
-    } catch (error: unknown) {
-      const mensagem =
-        error instanceof Error ? error.message : 'Erro desconhecido.';
-
-      Alert.alert('Erro ao abrir a galeria', mensagem);
+      const resposta = await expoFetch(`${API_URL}/`);
+      if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
+      setStatusApi('Backend conectado.');
+      Alert.alert('Conexão', 'API disponível.');
+    } catch (erro) {
+      setStatusApi('Falha na conexão.');
+      Alert.alert(
+        'Conexão',
+        erro instanceof Error ? erro.message : 'Falha desconhecida',
+      );
     }
   };
 
-  // ============================================================
-  // ENVIAR FOTOGRAFIA E DADOS PARA ANÁLISE MULTIMODAL
-  // ============================================================
-
-  const handleEnviarParaAnalise = async () => {
-    if (!localizacao.trim()) {
+  const analisar = async () => {
+    if (!localizacao.trim() || !imagemUri) {
       Alert.alert(
-        'Campo obrigatório',
-        'Informe a localização anatômica da lesão.',
+        'Dados obrigatórios',
+        'Informe a localização e selecione uma fotografia.',
       );
       return;
     }
-
-    if (!imagemUri) {
-      Alert.alert(
-        'Fotografia obrigatória',
-        'Tire uma fotografia ou selecione uma imagem da galeria.',
-      );
-      return;
-    }
-
-    const dorNumerica = Number(nivelDor);
 
     if (
-      nivelDor.trim() !== '' &&
-      (!Number.isFinite(dorNumerica) ||
-        dorNumerica < 0 ||
-        dorNumerica > 10)
+      nivelDor.trim() &&
+      (!Number.isFinite(Number(nivelDor)) ||
+        Number(nivelDor) < 0 ||
+        Number(nivelDor) > 10)
     ) {
-      Alert.alert(
-        'Nível de dor inválido',
-        'Informe um valor numérico entre 0 e 10.',
-      );
+      Alert.alert('Dor inválida', 'Informe um valor entre 0 e 10.');
       return;
     }
 
     setCarregando(true);
-    limparResultado();
-    setStatusApi(
-      provedor === 'todos'
-        ? 'Enviando dados e consultando os três provedores. Isso pode levar alguns minutos...'
-        : `Enviando dados para análise pelo ${provedor}...`,
-    );
+    limpar();
+    setStatusApi('Executando análise multimodal...');
 
     try {
-      // 1. Obter o arquivo de imagem selecionado.
-      const arquivoImagem = new File(imagemUri);
+      const arquivo = new File(imagemUri);
 
-      if (!arquivoImagem.exists) {
-        throw new Error(
-          'A imagem selecionada não foi encontrada no dispositivo.',
-        );
+      if (!arquivo.exists) {
+        throw new Error('Arquivo da fotografia não encontrado.');
       }
 
-      // 2. Criar formulário multipart.
-      const formData = new FormData();
+      const formulario = new FormData();
+      formulario.append('file', arquivo as unknown as Blob);
+      formulario.append('localizacao', localizacao.trim());
+      formulario.append('comprimento', comprimento.trim());
+      formulario.append('largura', largura.trim());
+      formulario.append('tipoExsudato', tipoExsudato.trim());
+      formulario.append('odor', odor);
+      formulario.append('nivelDor', nivelDor.trim());
+      formulario.append('queixaPrincipal', queixaPrincipal.trim());
+      formulario.append('observacoes', observacoes.trim());
+      formulario.append('provedor', provedor);
 
-      formData.append('file', arquivoImagem as unknown as Blob);
-
-      // 3. Adicionar os dados clínicos.
-      formData.append('localizacao', localizacao.trim());
-      formData.append('comprimento', comprimento.trim());
-      formData.append('largura', largura.trim());
-      formData.append('tipoExsudato', tipoExsudato.trim());
-      formData.append('odor', String(odor));
-      formData.append('nivelDor', nivelDor.trim());
-      formData.append('queixaPrincipal', queixaPrincipal.trim());
-      formData.append('observacoes', observacoes.trim());
-
-      // 4. Selecionar o provedor ou executar todos.
-      formData.append('provedor', provedor);
-
-      // Não definir Content-Type manualmente.
-      // O Expo deve montar o multipart boundary.
-      const response = await expoFetch(
+      const resposta = await expoFetch(
         `${API_URL}/preparar-analise-multimodal`,
         {
           method: 'POST',
-          headers: {
-            Accept: 'application/json',
-          },
-          body: formData,
+          headers: { Accept: 'application/json' },
+          body: formulario,
         },
       );
 
-      // 5. Interpretar possíveis erros da API.
-      if (!response.ok) {
-        let mensagemErro = `Erro HTTP ${response.status}.`;
+      const dados = await resposta.json();
 
-        try {
-          const erro = await response.json();
-
-          if (typeof erro.detail === 'string') {
-            mensagemErro = erro.detail;
-          } else if (Array.isArray(erro.detail)) {
-            mensagemErro = erro.detail
-              .map((item: { msg?: string }) => item.msg || 'Campo inválido')
-              .join('\n');
-          } else if (erro.mensagem) {
-            mensagemErro = erro.mensagem;
-          }
-        } catch {
-          // Mantém a mensagem HTTP caso a resposta não seja JSON.
-        }
-
-        throw new Error(mensagemErro);
+      if (!resposta.ok) {
+        const detalhe =
+          typeof dados.detail === 'string'
+            ? dados.detail
+            : `Erro HTTP ${resposta.status}`;
+        throw new Error(detalhe);
       }
 
-      // 6. Receber o resultado multimodal.
-      const data = (await response.json()) as RespostaAnalise;
+      const analise = dados as RespostaAPI;
 
-      if (!data.sucesso) {
-        throw new Error(
-          data.mensagem || 'O back-end não conseguiu concluir a análise.',
-        );
-      }
+      // Mesmo quando todos os provedores falham, preserva
+      // os erros individuais para apresentação na tela.
+      setResultado(analise);
 
-      // 7. Preparar URL da imagem processada.
-      if (data.imagem_processada_url) {
-        const caminho = data.imagem_processada_url.startsWith('/')
-          ? data.imagem_processada_url
-          : `/${data.imagem_processada_url}`;
+      const lista = Object.values(
+        analise.analise_multimodal?.resultados || {},
+      );
 
-        setImagemProcessadaUrl(`${API_URL}${caminho}`);
-      }
-
-      setResultado(data);
-
-      const resultados = data.analise_multimodal?.resultados || {};
-      const provedores = Object.values(resultados);
-      const quantidadeSucesso = provedores.filter(
-        (item) => item.sucesso,
-      ).length;
-
-      const quantidadeFalha = provedores.length - quantidadeSucesso;
+      const sucessos = lista.filter((item) => item.sucesso).length;
 
       setStatusApi(
-        `Análise concluída: ${quantidadeSucesso} provedor(es) com sucesso${
-          quantidadeFalha > 0
-            ? ` e ${quantidadeFalha} com falha`
-            : ''
-        }.`,
+        `${sucessos} de ${lista.length} provedores concluíram a análise.`,
       );
-    } catch (error: unknown) {
-      const mensagem =
-        error instanceof Error ? error.message : 'Erro desconhecido.';
-
-      setStatusApi('Falha ao realizar a análise multimodal.');
-
+    } catch (erro) {
+      setStatusApi('Erro ao executar a análise.');
       Alert.alert(
-        'Erro na análise',
-        `${mensagem}\n\nVerifique a conexão com o back-end e tente novamente.`,
+        'Erro',
+        erro instanceof Error ? erro.message : 'Falha desconhecida.',
       );
     } finally {
       setCarregando(false);
     }
   };
 
-  // ============================================================
-  // EXIBIR RESULTADO DE CADA PROVEDOR
-  // ============================================================
-
-  const renderResultadoProvedor = (
-    nome: string,
-    item: ResultadoProvedor,
-  ) => {
-    const sucesso = item.sucesso === true;
-    const resposta = item.resposta;
-
-    return (
-      <View
-        key={nome}
-        style={[
-          styles.cardProvedor,
-          sucesso ? styles.cardProvedorSucesso : styles.cardProvedorErro,
-        ]}
-      >
-        <View style={styles.provedorHeader}>
-          <Text style={styles.provedorTitulo}>
-            {nome.toUpperCase()}
-          </Text>
-
-          <Text
-            style={[
-              styles.provedorStatus,
-              { color: sucesso ? '#15803d' : '#b91c1c' },
-            ]}
-          >
-            {sucesso ? 'SUCESSO' : 'FALHA'}
-          </Text>
-        </View>
-
-        {item.modo ? (
-          <Text style={styles.textoSecundario}>
-            Modo: {item.modo}
-          </Text>
-        ) : null}
-
-        {typeof item.tempo_execucao_segundos === 'number' ? (
-          <Text style={styles.textoSecundario}>
-            Tempo de resposta:{' '}
-            {item.tempo_execucao_segundos.toFixed(2)} segundos
-          </Text>
-        ) : null}
-
-        {sucesso && resposta?.conteudo_descricao ? (
-          <>
-            <Text style={styles.subtituloCard}>
-              Descrição da análise
-            </Text>
-
-            <Text style={styles.textoResultado}>
-              {resposta.conteudo_descricao}
-            </Text>
-
-            {resposta.limitacoes_declaradas &&
-              resposta.limitacoes_declaradas.length > 0 && (
-                <>
-                  <Text style={styles.subtituloCard}>
-                    Limitações declaradas
-                  </Text>
-
-                  {resposta.limitacoes_declaradas.map(
-                    (limitacao, indice) => (
-                      <Text
-                        key={`${nome}-limitacao-${indice}`}
-                        style={styles.itemLimitacao}
-                      >
-                        {'\u2022'} {limitacao}
-                      </Text>
-                    ),
-                  )}
-                </>
-              )}
-          </>
-        ) : (
-          <Text style={styles.textoErro}>
-            {item.mensagem_erro ||
-              'O provedor não retornou uma análise válida.'}
-          </Text>
-        )}
-      </View>
+  const selecionarProvedor = (nome: string) => {
+    setProvedorEscolhido(nome);
+    setValidado(false);
+    setRevisao(
+      resultados[nome]?.resposta?.conteudo_descricao || '',
     );
   };
-
-  // ============================================================
-  // INTERFACE
-  // ============================================================
-
-  const resultados = resultado?.analise_multimodal?.resultados || {};
 
   return (
     <ScrollView
       contentContainerStyle={styles.container}
       keyboardShouldPersistTaps="handled"
     >
-      {/* PACIENTE */}
-
-      <View style={styles.cardPaciente}>
-        <Text style={styles.labelHeader}>
-          Paciente selecionado
-        </Text>
-
-        <Text style={styles.nomePaciente}>
-          {nomePacienteMock}
-        </Text>
-
-        <Text style={styles.idPaciente}>
-          ID: {pacienteId || '1'}
-        </Text>
-
-        <Text style={styles.avisoFicticio}>
-          Identificação demonstrativa: os dados do paciente ainda não
-          são carregados de um banco de dados.
-        </Text>
-      </View>
-
-      {/* CONEXÃO */}
-
-      <View style={styles.cardConexao}>
-        <Text style={styles.tituloCard}>
-          Conexão com o back-end
-        </Text>
-
-        <Text style={styles.urlConexao}>
-          {API_URL}
-        </Text>
-
-        {statusApi ? (
-          <Text style={styles.statusApi}>{statusApi}</Text>
-        ) : null}
-
-        <TouchableOpacity
-          style={[
-            styles.btnConexao,
-            testandoConexao && styles.btnDesabilitado,
-          ]}
-          onPress={handleTestarConexao}
-          disabled={testandoConexao || carregando}
-        >
-          {testandoConexao ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.textoBotao}>
-              Testar conexão
-            </Text>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      {/* DADOS CLÍNICOS */}
-
-      <Text style={styles.tituloSecao}>
-        1. Dados clínicos da lesão
+      <Text style={styles.titulo}>Nova avaliação</Text>
+      <Text style={styles.textoMenor}>
+        Paciente ID: {pacienteId || 'Não selecionado'}
+      </Text>
+      <Text style={styles.textoMenor}>
+        O cadastro do paciente ainda não está integrado ao backend.
       </Text>
 
-      <Text style={styles.label}>
-        Localização anatômica *
-      </Text>
+      <TouchableOpacity style={styles.botaoCinza} onPress={testarConexao}>
+        <Text style={styles.botaoTexto}>Testar conexão</Text>
+      </TouchableOpacity>
 
-      <TextInput
-        style={styles.input}
-        placeholder="Ex.: Calcanhar esquerdo"
-        value={localizacao}
-        onChangeText={setLocalizacao}
+      {statusApi ? (
+        <Text style={styles.status}>{statusApi}</Text>
+      ) : null}
+
+      <Text style={styles.titulo}>1. Dados clínicos</Text>
+
+      <Campo
+        titulo="Localização anatômica *"
+        valor={localizacao}
+        alterar={setLocalizacao}
+      />
+      <Campo
+        titulo="Comprimento (cm)"
+        valor={comprimento}
+        alterar={setComprimento}
+      />
+      <Campo
+        titulo="Largura (cm)"
+        valor={largura}
+        alterar={setLargura}
+      />
+      <Campo
+        titulo="Tipo de exsudato"
+        valor={tipoExsudato}
+        alterar={setTipoExsudato}
       />
 
+      <Text style={styles.rotulo}>Odor informado pelo profissional</Text>
       <View style={styles.linha}>
-        <View style={styles.coluna}>
-          <Text style={styles.label}>Comprimento (cm)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Ex.: 7"
-            keyboardType="decimal-pad"
-            value={comprimento}
-            onChangeText={setComprimento}
-          />
-        </View>
-
-        <View style={styles.coluna}>
-          <Text style={styles.label}>Largura (cm)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Ex.: 5"
-            keyboardType="decimal-pad"
-            value={largura}
-            onChangeText={setLargura}
-          />
-        </View>
+        {[
+          { valor: '', titulo: 'Não avaliado' },
+          { valor: 'sim', titulo: 'Presente' },
+          { valor: 'nao', titulo: 'Ausente' },
+        ].map((opcao) => (
+          <TouchableOpacity
+            key={opcao.titulo}
+            style={[
+              styles.opcao,
+              odor === opcao.valor && styles.opcaoAtiva,
+            ]}
+            onPress={() =>
+              setOdor(opcao.valor as 'sim' | 'nao' | '')
+            }
+          >
+            <Text style={styles.textoMenor}>{opcao.titulo}</Text>
+          </TouchableOpacity>
+        ))}
       </View>
 
-      <Text style={styles.label}>Tipo de exsudato</Text>
-
-      <TextInput
-        style={styles.input}
-        placeholder="Ex.: Seroso, purulento ou não informado"
-        value={tipoExsudato}
-        onChangeText={setTipoExsudato}
+      <Campo
+        titulo="Nível de dor (0 a 10)"
+        valor={nivelDor}
+        alterar={setNivelDor}
       />
-
-      <View style={styles.linhaSwitch}>
-        <View style={styles.coluna}>
-          <Text style={styles.label}>Presença de odor</Text>
-          <Text style={styles.textoSecundario}>
-            Ative se o profissional observar odor.
-          </Text>
-        </View>
-
-        <Switch
-          value={odor}
-          onValueChange={setOdor}
-          trackColor={{ false: '#cbd5e1', true: '#93c5fd' }}
-          thumbColor={odor ? '#0056b3' : '#f4f4f5'}
-        />
-      </View>
-
-      <Text style={styles.label}>Nível de dor (0 a 10)</Text>
-
-      <TextInput
-        style={styles.input}
-        placeholder="Deixe vazio se não foi informado"
-        keyboardType="numeric"
-        value={nivelDor}
-        onChangeText={setNivelDor}
-      />
-
-      <Text style={styles.label}>Queixa principal</Text>
-
-      <TextInput
-        style={[styles.input, styles.inputMultiline]}
-        placeholder="Descreva a queixa relatada pelo paciente."
+      <Campo
+        titulo="Queixa principal"
+        valor={queixaPrincipal}
+        alterar={setQueixaPrincipal}
         multiline
-        value={queixaPrincipal}
-        onChangeText={setQueixaPrincipal}
       />
-
-      <Text style={styles.label}>Observações clínicas</Text>
-
-      <TextInput
-        style={[styles.input, styles.inputMultiline]}
-        placeholder="Outras informações relevantes."
+      <Campo
+        titulo="Observações clínicas"
+        valor={observacoes}
+        alterar={setObservacoes}
         multiline
-        value={observacoes}
-        onChangeText={setObservacoes}
       />
 
-      {/* FOTOGRAFIA */}
-
-      <Text style={styles.tituloSecao}>
-        2. Registro fotográfico
-      </Text>
+      <Text style={styles.titulo}>2. Fotografia</Text>
 
       {imagemUri ? (
-        <View style={styles.cardImagem}>
-          <Text style={styles.label}>Fotografia selecionada</Text>
-
-          <Image
-            source={{ uri: imagemUri }}
-            style={styles.imagemPreview}
-          />
-
-          <TouchableOpacity
-            style={styles.btnRemover}
-            onPress={() => {
-              setImagemUri(null);
-              limparResultado();
-            }}
-            disabled={carregando}
-          >
-            <Text style={styles.textoBotao}>
-              Remover fotografia
-            </Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <View style={styles.cardSelecionarImagem}>
-          <Text style={styles.textoSecundario}>
-            Registre a lesão ou selecione uma fotografia existente.
-          </Text>
-
-          <TouchableOpacity
-            style={styles.btnPrincipal}
-            onPress={handleTirarFoto}
-            disabled={carregando}
-          >
-            <Text style={styles.textoBotao}>
-              Tirar fotografia
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.btnSecundario}
-            onPress={handleEscolherGaleria}
-            disabled={carregando}
-          >
-            <Text style={styles.textoBotao}>
-              Selecionar da galeria
-            </Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* SELEÇÃO DE IA */}
-
-      <Text style={styles.tituloSecao}>
-        3. Provedor de inteligência artificial
-      </Text>
-
-      <Text style={styles.textoSecundario}>
-        Escolha uma IA ou execute as três para comparar as respostas.
-        A execução conjunta pode demorar mais e consumir créditos das APIs.
-      </Text>
-
-      <View style={styles.listaProvedores}>
-        {PROVEDORES.map((item) => {
-          const selecionado = provedor === item.valor;
-
-          return (
-            <TouchableOpacity
-              key={item.valor}
-              style={[
-                styles.opcaoProvedor,
-                selecionado && styles.opcaoProvedorSelecionada,
-              ]}
-              onPress={() => {
-                setProvedor(item.valor);
-                limparResultado();
-              }}
-              disabled={carregando}
-            >
-              <Text
-                style={[
-                  styles.textoOpcaoProvedor,
-                  selecionado && styles.textoOpcaoProvedorSelecionada,
-                ]}
-              >
-                {selecionado ? '✓ ' : ''}
-                {item.titulo}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
-      {/* EXECUTAR ANÁLISE */}
+        <Image
+          source={{ uri: imagemUri }}
+          style={styles.imagem}
+          resizeMode="contain"
+        />
+      ) : null}
 
       <TouchableOpacity
-        style={[
-          styles.btnPrincipal,
-          carregando && styles.btnDesabilitado,
-        ]}
-        onPress={handleEnviarParaAnalise}
-        disabled={carregando || testandoConexao}
+        style={styles.botaoCinza}
+        onPress={() => selecionarImagem(true)}
+        disabled={carregando}
+      >
+        <Text style={styles.botaoTexto}>Tirar fotografia</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.botaoCinza}
+        onPress={() => selecionarImagem(false)}
+        disabled={carregando}
+      >
+        <Text style={styles.botaoTexto}>Selecionar da galeria</Text>
+      </TouchableOpacity>
+
+      <Text style={styles.titulo}>3. Inteligências artificiais</Text>
+
+      {PROVEDORES.map((item) => (
+        <TouchableOpacity
+          key={item.valor}
+          style={[
+            styles.opcao,
+            provedor === item.valor && styles.opcaoAtiva,
+          ]}
+          onPress={() => setProvedor(item.valor)}
+          disabled={carregando}
+        >
+          <Text style={styles.texto}>{item.titulo}</Text>
+        </TouchableOpacity>
+      ))}
+
+      <TouchableOpacity
+        style={styles.botao}
+        onPress={analisar}
+        disabled={carregando}
       >
         {carregando ? (
-          <View style={styles.carregandoLinha}>
-            <ActivityIndicator color="#fff" />
-            <Text style={styles.textoBotaoCarregando}>
-              Processando análise...
-            </Text>
-          </View>
+          <ActivityIndicator color="#fff" />
         ) : (
-          <Text style={styles.textoBotao}>
+          <Text style={styles.botaoTexto}>
             Executar análise multimodal
           </Text>
         )}
       </TouchableOpacity>
 
-      {carregando ? (
-        <Text style={styles.avisoEspera}>
-          Aguarde a resposta do back-end. Se selecionar todas as IAs,
-          a análise poderá levar alguns minutos. Mantenha o aplicativo
-          aberto enquanto o processamento acontece.
-        </Text>
-      ) : null}
-
-      {/* RESULTADOS */}
-
       {resultado ? (
-        <View style={styles.areaResultados}>
-          <Text style={styles.tituloSecao}>
-            4. Resultados da análise
-          </Text>
+        <>
+          <Text style={styles.titulo}>4. Resultados</Text>
 
-          <View style={styles.cardResumo}>
-            <Text style={styles.tituloCard}>
-              Resumo do processamento
+          <View style={styles.card}>
+            <Text style={styles.texto}>{resultado.mensagem}</Text>
+            <Text style={styles.textoMenor}>
+              {resultado.analise_multimodal?.data_processamento}
             </Text>
 
-            <Text style={styles.textoResultado}>
-              {resultado.mensagem ||
-                'O back-end retornou uma resposta.'}
-            </Text>
-
-            <Text style={styles.textoSecundario}>
-              Provedor selecionado: {resultado.provedor_selecionado || provedor}
-            </Text>
-
-            {resultado.analise_multimodal?.data_processamento ? (
-              <Text style={styles.textoSecundario}>
-                Data do processamento:{' '}
-                {resultado.analise_multimodal.data_processamento}
+            {resultado.analise_tecnica ? (
+              <Text style={styles.textoMenor}>
+                Brilho: {resultado.analise_tecnica.brilho_medio ?? '—'}
+                {' | '}
+                Contraste:{' '}
+                {resultado.analise_tecnica.contraste_global ?? '—'}
               </Text>
             ) : null}
           </View>
 
-          {/* IMAGEM PROCESSADA */}
+          {resultado.imagem_processada_url ? (
+            <View style={styles.card}>
+              <Text style={styles.subtitulo}>Imagem processada</Text>
+              <Image
+                source={{
+                  uri:
+                    API_URL +
+                    (resultado.imagem_processada_url.startsWith('/')
+                      ? ''
+                      : '/') +
+                    resultado.imagem_processada_url,
+                }}
+                style={styles.imagem}
+                resizeMode="contain"
+              />
+            </View>
+          ) : null}
 
-          {imagemProcessadaUrl ? (
-            <View style={styles.cardResultado}>
-              <Text style={styles.subtituloCard}>
-                Imagem processada pelo OpenCV
+          <Text style={styles.titulo}>Comparação das análises</Text>
+
+          {Object.entries(resultados).map(([nome, item]) => (
+            <View key={nome} style={styles.card}>
+              <Text style={styles.subtitulo}>
+                {nome.toUpperCase()} —{' '}
+                {item.sucesso ? 'SUCESSO' : 'FALHA'}
               </Text>
 
-              <Image
-                source={{ uri: imagemProcessadaUrl }}
-                style={styles.imagemProcessada}
+              <Text style={styles.textoMenor}>
+                Tempo: {item.tempo_execucao_segundos?.toFixed(2) || '—'}s
+              </Text>
+
+              {item.sucesso && item.resposta ? (
+                <>
+                  <ResultadoEstruturado resposta={item.resposta} />
+
+                  <TouchableOpacity
+                    style={styles.botao}
+                    onPress={() => selecionarProvedor(nome)}
+                  >
+                    <Text style={styles.botaoTexto}>
+                      Selecionar para revisão
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <Text style={styles.erro}>
+                  {item.mensagem_erro || 'Falha sem detalhes.'}
+                </Text>
+              )}
+            </View>
+          ))}
+
+          {provedorEscolhido ? (
+            <View style={styles.card}>
+              <Text style={styles.titulo}>
+                5. Revisão profissional
+              </Text>
+              <Text style={styles.texto}>
+                Análise selecionada: {provedorEscolhido.toUpperCase()}
+              </Text>
+              <Text style={styles.textoMenor}>
+                Revise e corrija a descrição antes de confirmar.
+                Esta revisão é local e ainda não é salva no servidor.
+              </Text>
+
+              <TextInput
+                style={[styles.input, styles.revisao]}
+                value={revisao}
+                onChangeText={(texto) => {
+                  setRevisao(texto);
+                  setValidado(false);
+                }}
+                multiline
+                textAlignVertical="top"
               />
 
-              <Text style={styles.textoSecundario}>
-                A imagem processada é um resultado técnico do sistema
-                e não representa, por si só, uma avaliação clínica.
-              </Text>
-            </View>
-          ) : null}
+              <TouchableOpacity
+                style={styles.botao}
+                onPress={() => {
+                  if (!revisao.trim()) {
+                    Alert.alert(
+                      'Revisão necessária',
+                      'Preencha a avaliação revisada.',
+                    );
+                    return;
+                  }
+                  setValidado(true);
+                  Alert.alert(
+                    'Revisão registrada nesta sessão',
+                    'A avaliação foi marcada como revisada localmente. ' +
+                      'Ainda não foi persistida em prontuário.',
+                  );
+                }}
+              >
+                <Text style={styles.botaoTexto}>
+                  Confirmar revisão local
+                </Text>
+              </TouchableOpacity>
 
-          {/* INFORMAÇÕES TÉCNICAS */}
-
-          {resultado.dimensoes_originais ||
-          resultado.analise_tecnica ? (
-            <View style={styles.cardResultado}>
-              <Text style={styles.subtituloCard}>
-                Informações técnicas da imagem
-              </Text>
-
-              {resultado.dimensoes_originais ? (
-                <>
-                  <Text style={styles.textoResultado}>
-                    Dimensões originais:{' '}
-                    {resultado.dimensoes_originais.largura_pixels ?? '—'}
-                    {' × '}
-                    {resultado.dimensoes_originais.altura_pixels ?? '—'}
-                    {' pixels'}
-                  </Text>
-
-                  <Text style={styles.textoResultado}>
-                    Canais de imagem:{' '}
-                    {resultado.dimensoes_originais.canais ?? '—'}
-                  </Text>
-
-                  <Text style={styles.textoResultado}>
-                    Total de pixels:{' '}
-                    {resultado.dimensoes_originais.total_pixels?.toLocaleString(
-                      'pt-BR',
-                    ) ?? '—'}
-                  </Text>
-                </>
-              ) : null}
-
-              {resultado.analise_tecnica ? (
-                <>
-                  <Text style={styles.textoResultado}>
-                    Brilho médio:{' '}
-                    {resultado.analise_tecnica.brilho_medio ?? '—'}
-                    {' / 255'}
-                  </Text>
-
-                  <Text style={styles.textoResultado}>
-                    Contraste global:{' '}
-                    {resultado.analise_tecnica.contraste_global ?? '—'}
-                  </Text>
-                </>
+              {validado ? (
+                <Text style={styles.sucesso}>
+                  Revisão confirmada nesta sessão.
+                </Text>
               ) : null}
             </View>
           ) : null}
 
-          {/* RESPOSTAS DOS PROVEDORES */}
-
-          <Text style={styles.subtituloResultados}>
-            Comparação das análises
-          </Text>
-
-          {Object.keys(resultados).length > 0 ? (
-            Object.entries(resultados).map(([nome, item]) =>
-              renderResultadoProvedor(nome, item),
-            )
-          ) : (
-            <View style={styles.cardResultado}>
-              <Text style={styles.textoResultado}>
-                A API não retornou resultados individuais dos provedores.
-              </Text>
-            </View>
-          )}
-
-          {/* AVISO CLÍNICO */}
-
-          <View style={styles.cardAviso}>
-            <Text style={styles.tituloAviso}>
-              Atenção: validação profissional
+          <View style={styles.card}>
+            <Text style={styles.subtitulo}>
+              Validação profissional obrigatória
             </Text>
-
-            <Text style={styles.textoAviso}>
-              As respostas das inteligências artificiais são descrições
-              automatizadas e podem divergir entre si. Não constituem
-              diagnóstico e não substituem a avaliação presencial.
-              O profissional de saúde deve revisar as informações e
-              registrar sua própria avaliação antes de utilizá-las
-              na assistência ao paciente.
+            <Text style={styles.texto}>
+              As respostas automatizadas podem conter erros.
+              As classificações de tecidos, os percentuais,
+              as coordenadas e os tópicos de cuidado não
+              substituem a avaliação presencial do enfermeiro.
             </Text>
           </View>
-        </View>
+        </>
       ) : null}
     </ScrollView>
   );
 }
 
-// ============================================================
-// ESTILOS
-// ============================================================
-
 const styles = StyleSheet.create({
   container: {
     padding: 18,
-    paddingBottom: 40,
+    paddingBottom: 60,
     backgroundColor: '#f8fafc',
-    flexGrow: 1,
   },
-
-  cardPaciente: {
-    backgroundColor: '#eef6ff',
-    padding: 15,
-    borderRadius: 10,
-    borderLeftWidth: 4,
-    borderLeftColor: '#0056b3',
-    marginBottom: 16,
-  },
-
-  labelHeader: {
-    fontSize: 12,
-    color: '#64748b',
-    textTransform: 'uppercase',
-    fontWeight: 'bold',
-  },
-
-  nomePaciente: {
-    fontSize: 17,
+  titulo: {
+    fontSize: 19,
     fontWeight: 'bold',
     color: '#0056b3',
-    marginTop: 4,
-  },
-
-  idPaciente: {
-    fontSize: 13,
-    color: '#475569',
-    marginTop: 3,
-  },
-
-  avisoFicticio: {
-    fontSize: 12,
-    color: '#92400e',
-    marginTop: 8,
-    lineHeight: 17,
-  },
-
-  cardConexao: {
-    backgroundColor: '#f0fdf4',
-    borderWidth: 1,
-    borderColor: '#bbf7d0',
-    padding: 14,
-    borderRadius: 10,
-    marginBottom: 20,
-  },
-
-  tituloCard: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    color: '#166534',
-    marginBottom: 6,
-  },
-
-  urlConexao: {
-    fontSize: 12,
-    color: '#15803d',
-    marginBottom: 8,
-  },
-
-  statusApi: {
-    fontSize: 13,
-    color: '#334155',
-    marginBottom: 8,
-    lineHeight: 19,
-  },
-
-  tituloSecao: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#0056b3',
-    marginTop: 10,
-    marginBottom: 14,
-  },
-
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#334155',
-    marginBottom: 6,
-  },
-
-  input: {
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 15,
-    color: '#1e293b',
-    backgroundColor: '#fff',
-    marginBottom: 14,
-  },
-
-  inputMultiline: {
-    minHeight: 85,
-    textAlignVertical: 'top',
-  },
-
-  linha: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-
-  coluna: {
-    flex: 1,
-  },
-
-  linhaSwitch: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-  },
-
-  textoSecundario: {
-    fontSize: 12,
-    color: '#64748b',
-    lineHeight: 18,
-    marginBottom: 6,
-  },
-
-  cardSelecionarImagem: {
-    padding: 16,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 10,
-    marginBottom: 18,
-  },
-
-  cardImagem: {
-    padding: 12,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    marginBottom: 18,
-  },
-
-  imagemPreview: {
-    width: '100%',
-    height: 240,
-    borderRadius: 8,
-    resizeMode: 'contain',
-    backgroundColor: '#f1f5f9',
-    marginVertical: 8,
-  },
-
-  imagemProcessada: {
-    width: '100%',
-    height: 240,
-    borderRadius: 8,
-    resizeMode: 'contain',
-    backgroundColor: '#f1f5f9',
-    marginVertical: 8,
-  },
-
-  btnPrincipal: {
-    backgroundColor: '#0056b3',
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 8,
-    marginBottom: 10,
-  },
-
-  btnSecundario: {
-    backgroundColor: '#475569',
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-
-  btnConexao: {
-    backgroundColor: '#15803d',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-
-  btnRemover: {
-    backgroundColor: '#b91c1c',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-
-  btnDesabilitado: {
-    backgroundColor: '#94a3b8',
-  },
-
-  textoBotao: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 14,
-  },
-
-  carregandoLinha: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-  },
-
-  textoBotaoCarregando: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 14,
-    marginLeft: 8,
-  },
-
-  listaProvedores: {
-    marginBottom: 14,
-    gap: 8,
-  },
-
-  opcaoProvedor: {
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    padding: 13,
-  },
-
-  opcaoProvedorSelecionada: {
-    borderColor: '#0056b3',
-    backgroundColor: '#eff6ff',
-  },
-
-  textoOpcaoProvedor: {
-    fontSize: 14,
-    color: '#334155',
-    fontWeight: '500',
-  },
-
-  textoOpcaoProvedorSelecionada: {
-    color: '#0056b3',
-    fontWeight: 'bold',
-  },
-
-  avisoEspera: {
-    fontSize: 12,
-    color: '#92400e',
-    backgroundColor: '#fffbeb',
-    padding: 12,
-    borderRadius: 8,
-    lineHeight: 18,
-    marginBottom: 14,
-  },
-
-  areaResultados: {
     marginTop: 18,
-  },
-
-  cardResumo: {
-    backgroundColor: '#eff6ff',
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-    padding: 14,
-    borderRadius: 10,
-    marginBottom: 14,
-  },
-
-  cardResultado: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    padding: 14,
-    borderRadius: 10,
-    marginBottom: 14,
-  },
-
-  subtituloResultados: {
-    fontSize: 17,
-    fontWeight: 'bold',
-    color: '#1e293b',
-    marginTop: 12,
     marginBottom: 12,
   },
-
-  cardProvedor: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 14,
-  },
-
-  cardProvedorSucesso: {
-    borderColor: '#bbf7d0',
-  },
-
-  cardProvedorErro: {
-    borderColor: '#fecaca',
-  },
-
-  provedorHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-
-  provedorTitulo: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#1e293b',
-  },
-
-  provedorStatus: {
-    fontSize: 11,
-    fontWeight: 'bold',
-  },
-
-  subtituloCard: {
-    fontSize: 14,
+  subtitulo: {
+    fontSize: 15,
     fontWeight: 'bold',
     color: '#0056b3',
-    marginTop: 10,
+    marginBottom: 8,
+  },
+  rotulo: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#334155',
     marginBottom: 6,
   },
-
-  textoResultado: {
+  texto: {
     fontSize: 13,
     color: '#334155',
     lineHeight: 20,
-    marginBottom: 7,
-  },
-
-  itemLimitacao: {
-    fontSize: 12,
-    color: '#475569',
-    lineHeight: 19,
     marginBottom: 5,
   },
-
-  textoErro: {
-    fontSize: 13,
-    color: '#b91c1c',
-    lineHeight: 19,
-    marginTop: 8,
+  textoMenor: {
+    fontSize: 12,
+    color: '#64748b',
+    lineHeight: 18,
+    marginBottom: 5,
   },
-
-  cardAviso: {
-    backgroundColor: '#fffbeb',
+  input: {
+    backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: '#fcd34d',
-    padding: 14,
-    borderRadius: 10,
-    marginTop: 4,
-  },
-
-  tituloAviso: {
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    padding: 12,
     fontSize: 14,
+    marginBottom: 12,
+    color: '#1e293b',
+  },
+  multiline: {
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  revisao: {
+    minHeight: 180,
+  },
+  linha: {
+    flexDirection: 'row',
+    gap: 7,
+    marginBottom: 12,
+  },
+  opcao: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#fff',
+    marginBottom: 7,
+  },
+  opcaoAtiva: {
+    borderColor: '#0056b3',
+    backgroundColor: '#dbeafe',
+  },
+  botao: {
+    backgroundColor: '#0056b3',
+    padding: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginVertical: 10,
+  },
+  botaoCinza: {
+    backgroundColor: '#475569',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginVertical: 5,
+  },
+  botaoTexto: {
+    color: '#fff',
     fontWeight: 'bold',
-    color: '#92400e',
+    fontSize: 14,
+  },
+  card: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 14,
+  },
+  secaoInterna: {
+    marginTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    paddingTop: 10,
+  },
+  grupo: {
+    marginBottom: 10,
+  },
+  bloco: {
+    padding: 10,
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
     marginBottom: 8,
   },
-
-  textoAviso: {
-    fontSize: 12,
-    color: '#78350f',
-    lineHeight: 19,
+  imagem: {
+    width: '100%',
+    height: 250,
+    backgroundColor: '#e2e8f0',
+    borderRadius: 8,
+    marginVertical: 10,
+  },
+  status: {
+    color: '#475569',
+    marginVertical: 8,
+  },
+  erro: {
+    color: '#b91c1c',
+    fontSize: 13,
+    marginTop: 10,
+  },
+  sucesso: {
+    color: '#15803d',
+    fontWeight: 'bold',
+    marginTop: 8,
   },
 });
