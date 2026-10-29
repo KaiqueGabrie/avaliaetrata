@@ -1,10 +1,12 @@
-
 import logging
 import os
 import uuid
 
 from threading import RLock
 from typing import Dict, Literal, Optional
+from routers.pacientes import router as pacientes_router
+from routers.auth import router as auth_router
+from routers.analises import router as analises_router
 
 from fastapi import (
     FastAPI,
@@ -65,6 +67,13 @@ app = FastAPI(
     ),
     version="2.3.0",
 )
+
+app.include_router(auth_router)
+app.include_router(auth_router)
+app.include_router(pacientes_router)
+app.include_router(auth_router)
+app.include_router(pacientes_router)
+app.include_router(analises_router)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
