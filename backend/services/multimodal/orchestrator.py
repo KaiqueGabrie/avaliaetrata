@@ -1,5 +1,8 @@
+
 import concurrent.futures
+import logging
 import time
+
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -14,13 +17,30 @@ from services.multimodal.gemini import GeminiProvider
 from services.multimodal.openai import OpenAIProvider
 from services.multimodal.kimi import KimiProvider
 
+from services.multimodal.validador import (
+    validar_resposta,
+    adicionar_alertas_revisao,
+)
+
+
+logger = logging.getLogger(__name__)
+
 
 class MultimodalOrchestrator:
     """
     Executa provedores multimodais em paralelo.
 
-    A falha de um provedor não deve impedir o retorno
-    dos resultados dos outros.
+    Cada provedor funciona independentemente.
+
+    Após receber uma resposta bem-sucedida,
+    executa a validação de consistência.
+
+    Os alertas são adicionados aos pontos
+    de revisão profissional, sem modificar
+    os achados visuais produzidos pela IA.
+
+    O resultado poderá ser utilizado pelo
+    módulo comparador multimodal.
     """
 
     MAX_ESPERA_SEGUNDOS = 135
@@ -39,6 +59,7 @@ class MultimodalOrchestrator:
         tempo: float = 0.0,
         modo: str = "erro",
     ) -> ResultadoProvedor:
+
         return ResultadoProvedor(
             provedor=nome,
             modo=modo,
@@ -47,6 +68,98 @@ class MultimodalOrchestrator:
             resposta=None,
             mensagem_erro=mensagem,
         )
+
+    @staticmethod
+    def _validar_resultado(
+        resultado: ResultadoProvedor,
+    ) -> ResultadoProvedor:
+        """
+        Valida uma resposta normalizada.
+
+        Se houver inconsistências, acrescenta
+        alertas à cópia da resposta.
+
+        Problemas no validador não devem
+        apagar uma análise já recebida.
+        """
+
+        if not resultado.sucesso:
+            return resultado
+
+        if resultado.resposta is None:
+            logger.warning(
+                "Provedor %s informou sucesso "
+                "sem uma resposta estruturada.",
+                resultado.provedor,
+            )
+            return resultado
+
+        try:
+            relatorio = validar_resposta(
+                resultado.resposta
+            )
+
+            print(
+                f"\n[VALIDADOR EXECUTADO] "
+                f"Provedor: {resultado.provedor} | "
+                f"Estrutura válida: "
+                f"{relatorio.valido_estruturalmente} | "
+                f"Revisão necessária: "
+                f"{relatorio.requer_revisao} | "
+                f"Alertas: {relatorio.total_alertas}",
+                flush=True,
+            )
+
+            logger.info(
+                "Validação de %s: "
+                "estrutura=%s, revisão=%s, "
+                "alertas=%d",
+                resultado.provedor,
+                relatorio.valido_estruturalmente,
+                relatorio.requer_revisao,
+                relatorio.total_alertas,
+            )
+
+            for alerta in relatorio.alertas:
+                logger.warning(
+                    "[%s] %s (%s): %s",
+                    resultado.provedor,
+                    alerta.codigo,
+                    alerta.severidade,
+                    alerta.mensagem,
+                )
+
+            if relatorio.total_alertas > 0:
+                resultado.resposta = (
+                    adicionar_alertas_revisao(
+                        resultado.resposta,
+                        relatorio,
+                    )
+                )
+
+        except Exception:
+            logger.exception(
+                "Falha na validação da resposta "
+                "do provedor %s.",
+                resultado.provedor,
+            )
+
+            if resultado.resposta is not None:
+                aviso = (
+                    "A validação automática de "
+                    "consistência não foi concluída. "
+                    "Revisão profissional necessária."
+                )
+
+                if (
+                    aviso not in
+                    resultado.resposta.pontos_para_revisao_profissional
+                ):
+                    resultado.resposta.pontos_para_revisao_profissional.append(
+                        aviso
+                    )
+
+        return resultado
 
     def executar_analise_comparativa(
         self,
@@ -61,14 +174,12 @@ class MultimodalOrchestrator:
                 "kimi",
             ]
 
-        # Remove nomes repetidos sem alterar a ordem.
         provedores_desejados = list(
             dict.fromkeys(provedores_desejados)
         )
 
         resultados_finais: Dict[str, ResultadoProvedor] = {}
 
-        # Informa explicitamente os nomes desconhecidos.
         for nome in provedores_desejados:
             if nome not in self._providers:
                 resultados_finais[nome] = self._falha(
@@ -89,7 +200,6 @@ class MultimodalOrchestrator:
                 resultados=resultados_finais,
             )
 
-        inicio_geral = time.monotonic()
         executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=len(provedores_para_executar)
         )
@@ -98,10 +208,12 @@ class MultimodalOrchestrator:
         future_to_provider = {}
 
         try:
-            # Inicia os provedores concorrentemente.
             for provedor in provedores_para_executar:
                 nome = provedor.provider_name
-                inicio_por_provedor[nome] = time.monotonic()
+
+                inicio_por_provedor[nome] = (
+                    time.monotonic()
+                )
 
                 future = executor.submit(
                     provedor.analisar,
@@ -116,9 +228,9 @@ class MultimodalOrchestrator:
                 return_when=concurrent.futures.ALL_COMPLETED,
             )
 
-            # Processa as chamadas concluídas.
             for future in concluidas:
                 nome = future_to_provider[future]
+
                 tempo = (
                     time.monotonic()
                     - inicio_por_provedor[nome]
@@ -127,17 +239,30 @@ class MultimodalOrchestrator:
                 try:
                     resultado = future.result()
 
-                    if not isinstance(resultado, ResultadoProvedor):
+                    if not isinstance(
+                        resultado,
+                        ResultadoProvedor,
+                    ):
                         resultados_finais[nome] = self._falha(
                             nome,
                             "O provedor retornou um resultado "
                             "em formato inesperado.",
                             tempo,
                         )
-                    else:
-                        resultados_finais[nome] = resultado
+                        continue
+
+                    resultado = self._validar_resultado(
+                        resultado
+                    )
+
+                    resultados_finais[nome] = resultado
 
                 except Exception as erro:
+                    logger.exception(
+                        "Erro inesperado no provedor %s.",
+                        nome,
+                    )
+
                     resultados_finais[nome] = self._falha(
                         nome,
                         "Erro inesperado durante a execução: "
@@ -145,9 +270,9 @@ class MultimodalOrchestrator:
                         tempo,
                     )
 
-            # Registra provedores que excederam o limite geral.
             for future in pendentes:
                 nome = future_to_provider[future]
+
                 tempo = (
                     time.monotonic()
                     - inicio_por_provedor[nome]
@@ -155,21 +280,17 @@ class MultimodalOrchestrator:
 
                 resultados_finais[nome] = self._falha(
                     nome,
-                    "O provedor excedeu o limite geral de espera "
+                    "O provedor excedeu o limite geral "
                     f"de {self.MAX_ESPERA_SEGUNDOS} segundos. "
-                    "Verifique o timeout individual, a conexão "
-                    "e a disponibilidade da API.",
+                    "Verifique o timeout individual, "
+                    "a conexão e a disponibilidade da API.",
                     tempo,
                     modo="timeout",
                 )
 
-                # Cancela tarefas que ainda não começaram.
-                # Uma chamada já em execução não pode ser interrompida
-                # à força por Future.cancel().
                 future.cancel()
 
         finally:
-            # Não bloqueia o retorno esperando tarefas pendentes.
             executor.shutdown(
                 wait=False,
                 cancel_futures=True,
