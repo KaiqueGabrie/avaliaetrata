@@ -15,6 +15,7 @@ import {
 import { File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams } from 'expo-router';
+import { obterToken, mensagemErro, apiJson } from '../../config/cliente';
 import { fetch as expoFetch } from 'expo/fetch';
 
 import { API_URL } from '../../config/api';
@@ -28,6 +29,16 @@ type Provedor = 'gemini' | 'openai' | 'kimi' | 'todos';
 type RespostaAPI = {
   sucesso: boolean;
   mensagem: string;
+  analise_id: number;
+  comparacao_multimodal?: {
+    componentes?: Record<string, {
+      nome?: string;
+      situacao_descritiva?: string;
+      divergencia_status?: boolean;
+      observacao_descritiva?: string;
+    }>;
+    observacao_metodologica?: string;
+  };
   imagem_processada_url?: string;
   analise_tecnica?: {
     brilho_medio?: number;
@@ -267,26 +278,12 @@ function ResultadoEstruturado({
         <Lista itens={resposta.medidas?.observacoes} />
       </Secao>
 
-      <Secao titulo="Regiões identificadas na imagem">
-        <Text style={styles.textoMenor}>
-          Coordenadas normalizadas de 0 a 1, referentes à
-          imagem processada. Ainda não representam segmentação
-          validada.
-        </Text>
-
+      <Secao titulo="Regiões observadas na fotografia">
         {marcacoes?.regioes?.length ? (
           marcacoes.regioes.map((regiao, indice) => (
             <View key={indice} style={styles.bloco}>
               <Text style={styles.rotulo}>{regiao.rotulo}</Text>
               <Text style={styles.texto}>{regiao.descricao}</Text>
-              <Text style={styles.textoMenor}>
-                Pontos: {regiao.pontos?.length || 0}
-              </Text>
-              {regiao.pontos?.map((ponto, i) => (
-                <Text key={i} style={styles.textoMenor}>
-                  {i + 1}: x={ponto.x.toFixed(3)}, y={ponto.y.toFixed(3)}
-                </Text>
-              ))}
             </View>
           ))
         ) : (
@@ -298,7 +295,7 @@ function ResultadoEstruturado({
         <Lista itens={marcacoes?.limitacoes} />
       </Secao>
 
-      <Secao titulo="Plano de cuidados — rascunho para revisão">
+      <Secao titulo="Pontos de cuidado para revisão profissional">
         {plano?.sugestoes?.length ? (
           plano.sugestoes.map((sugestao, indice) => (
             <View key={indice} style={styles.bloco}>
@@ -354,6 +351,7 @@ export default function NovaAvaliacaoScreen() {
   const [provedorEscolhido, setProvedorEscolhido] = useState('');
   const [revisao, setRevisao] = useState('');
   const [validado, setValidado] = useState(false);
+  const [salvandoRevisao, setSalvandoRevisao] = useState(false);
 
   const resultados = resultado?.analise_multimodal?.resultados || {};
 
@@ -399,53 +397,60 @@ export default function NovaAvaliacaoScreen() {
     }
   };
 
-  const testarConexao = async () => {
-    try {
-      const resposta = await expoFetch(`${API_URL}/`);
-      if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
-      setStatusApi('Backend conectado.');
-      Alert.alert('Conexão', 'API disponível.');
-    } catch (erro) {
-      setStatusApi('Falha na conexão.');
-      Alert.alert(
-        'Conexão',
-        erro instanceof Error ? erro.message : 'Falha desconhecida',
-      );
-    }
-  };
-
   const analisar = async () => {
-    if (!localizacao.trim() || !imagemUri) {
-      Alert.alert(
-        'Dados obrigatórios',
-        'Informe a localização e selecione uma fotografia.',
-      );
+    if (!pacienteId || !/^\d+$/.test(pacienteId)) {
+      Alert.alert('Paciente obrigatório', 'Abra a avaliação a partir do prontuário de um paciente.');
       return;
     }
-
-    if (
-      nivelDor.trim() &&
-      (!Number.isFinite(Number(nivelDor)) ||
-        Number(nivelDor) < 0 ||
-        Number(nivelDor) > 10)
-    ) {
+    if (!localizacao.trim() || !imagemUri) {
+      Alert.alert('Dados obrigatórios', 'Informe a localização e selecione uma fotografia.');
+      return;
+    }
+    if (nivelDor.trim() && (!Number.isFinite(Number(nivelDor)) || Number(nivelDor) < 0 || Number(nivelDor) > 10)) {
       Alert.alert('Dor inválida', 'Informe um valor entre 0 e 10.');
       return;
     }
 
     setCarregando(true);
     limpar();
-    setStatusApi('Executando análise multimodal...');
-
+    let analiseId: number | null = null;
     try {
       const arquivo = new File(imagemUri);
+      if (!arquivo.exists) throw new Error('Arquivo da fotografia não encontrado.');
+      const token = await obterToken();
 
-      if (!arquivo.exists) {
-        throw new Error('Arquivo da fotografia não encontrado.');
-      }
+      // 1. Cria uma avaliação pendente associada ao paciente.
+      setStatusApi('1/3 — Registrando avaliação...');
+      const criada = await apiJson<{ id_analise: number }>(
+        `/pacientes/${pacienteId}/analises`,
+        { method: 'POST', body: JSON.stringify({
+          queixa_principal: queixaPrincipal.trim() || null,
+          observacoes_clinicas: observacoes.trim() || null,
+          contexto_clinico_json: {
+            localizacao: localizacao.trim(), comprimento: comprimento.trim(),
+            largura: largura.trim(), tipoExsudato: tipoExsudato.trim(),
+            odor, nivelDor: nivelDor.trim(),
+          },
+        }) }
+      );
+      analiseId = criada.id_analise;
 
+      // 2. Envia a foto; o backend executa OpenCV e vincula a imagem.
+      setStatusApi('2/3 — Registrando fotografia...');
+      const foto = new FormData();
+      const extensao = imagemUri.toLowerCase().split('?')[0].split('.').pop();
+      const tipo = extensao === 'png' ? 'image/png' : extensao === 'webp' ? 'image/webp' : 'image/jpeg';
+      foto.append('file', arquivo as unknown as Blob, `lesao.${tipo.split('/')[1]}`);
+      const respostaFoto = await expoFetch(
+        `${API_URL}/pacientes/${pacienteId}/analises/${analiseId}/imagem`,
+        { method: 'POST', headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }, body: foto }
+      );
+      if (!respostaFoto.ok) throw new Error(await mensagemErro(respostaFoto as Response));
+      const dadosFoto = await respostaFoto.json();
+
+      // 3. Executa os provedores selecionados, usando a imagem já salva.
+      setStatusApi('3/3 — Analisando a fotografia. Isso pode levar alguns minutos...');
       const formulario = new FormData();
-      formulario.append('file', arquivo as unknown as Blob);
       formulario.append('localizacao', localizacao.trim());
       formulario.append('comprimento', comprimento.trim());
       formulario.append('largura', largura.trim());
@@ -455,50 +460,43 @@ export default function NovaAvaliacaoScreen() {
       formulario.append('queixaPrincipal', queixaPrincipal.trim());
       formulario.append('observacoes', observacoes.trim());
       formulario.append('provedor', provedor);
-
       const resposta = await expoFetch(
-        `${API_URL}/preparar-analise-multimodal`,
-        {
-          method: 'POST',
-          headers: { Accept: 'application/json' },
-          body: formulario,
-        },
+        `${API_URL}/analises/${analiseId}/executar-multimodal`,
+        { method: 'POST', headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }, body: formulario }
       );
-
-      const dados = await resposta.json();
-
-      if (!resposta.ok) {
-        const detalhe =
-          typeof dados.detail === 'string'
-            ? dados.detail
-            : `Erro HTTP ${resposta.status}`;
-        throw new Error(detalhe);
-      }
-
-      const analise = dados as RespostaAPI;
-
-      // Mesmo quando todos os provedores falham, preserva
-      // os erros individuais para apresentação na tela.
-      setResultado(analise);
-
-      const lista = Object.values(
-        analise.analise_multimodal?.resultados || {},
-      );
-
+      if (!resposta.ok) throw new Error(await mensagemErro(resposta as Response));
+      const dados = await resposta.json() as RespostaAPI;
+      setResultado({ ...dados, analise_id: analiseId, imagem_processada_url: undefined,
+        analise_tecnica: dadosFoto.analise_tecnica });
+      const lista = Object.values(dados.analise_multimodal?.resultados || {});
       const sucessos = lista.filter((item) => item.sucesso).length;
-
-      setStatusApi(
-        `${sucessos} de ${lista.length} provedores concluíram a análise.`,
-      );
+      setStatusApi(sucessos > 0
+        ? `${sucessos} de ${lista.length} análises concluídas. Confira os resultados abaixo.`
+        : 'Não foi possível concluir a análise. Você pode consultar a avaliação no prontuário.');
     } catch (erro) {
-      setStatusApi('Erro ao executar a análise.');
-      Alert.alert(
-        'Erro',
-        erro instanceof Error ? erro.message : 'Falha desconhecida.',
-      );
-    } finally {
-      setCarregando(false);
+      setStatusApi(analiseId
+        ? 'Não foi possível concluir a análise. Consulte o prontuário antes de tentar novamente.'
+        : 'Erro ao criar avaliação.');
+      Alert.alert('Não foi possível concluir', 'Confira sua conexão e os dados informados. Se o problema continuar, tente novamente mais tarde.');
+    } finally { setCarregando(false); }
+  };
+
+  const salvarRevisao = async () => {
+    if (!resultado?.analise_id || !provedorEscolhido || !revisao.trim()) {
+      Alert.alert('Revisão necessária', 'Selecione uma análise e preencha a descrição revisada.');
+      return;
     }
+    setSalvandoRevisao(true);
+    try {
+      await apiJson(`/analises/${resultado.analise_id}/relatorios/${provedorEscolhido}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ campo: 'conteudo_descricao', novo_valor: revisao.trim() }),
+      });
+      setValidado(true);
+      Alert.alert('Revisão salva', 'Revisão salva com sucesso.');
+    } catch (e) {
+      Alert.alert('Erro ao salvar revisão', e instanceof Error ? e.message : 'Falha desconhecida.');
+    } finally { setSalvandoRevisao(false); }
   };
 
   const selecionarProvedor = (nome: string) => {
@@ -515,16 +513,7 @@ export default function NovaAvaliacaoScreen() {
       keyboardShouldPersistTaps="handled"
     >
       <Text style={styles.titulo}>Nova avaliação</Text>
-      <Text style={styles.textoMenor}>
-        Paciente ID: {pacienteId || 'Não selecionado'}
-      </Text>
-      <Text style={styles.textoMenor}>
-        O cadastro do paciente ainda não está integrado ao backend.
-      </Text>
-
-      <TouchableOpacity style={styles.botaoCinza} onPress={testarConexao}>
-        <Text style={styles.botaoTexto}>Testar conexão</Text>
-      </TouchableOpacity>
+      <Text style={styles.textoMenor}>Prontuário nº {pacienteId || 'Não selecionado'}</Text>
 
       {statusApi ? (
         <Text style={styles.status}>{statusApi}</Text>
@@ -644,7 +633,7 @@ export default function NovaAvaliacaoScreen() {
           <ActivityIndicator color="#fff" />
         ) : (
           <Text style={styles.botaoTexto}>
-            Executar análise multimodal
+            Analisar fotografia
           </Text>
         )}
       </TouchableOpacity>
@@ -654,24 +643,16 @@ export default function NovaAvaliacaoScreen() {
           <Text style={styles.titulo}>4. Resultados</Text>
 
           <View style={styles.card}>
-            <Text style={styles.texto}>{resultado.mensagem}</Text>
+            <Text style={styles.texto}>Confira as análises disponíveis e revise os resultados.</Text>
             <Text style={styles.textoMenor}>
-              {resultado.analise_multimodal?.data_processamento}
+              Avaliação nº {resultado.analise_id}
             </Text>
 
-            {resultado.analise_tecnica ? (
-              <Text style={styles.textoMenor}>
-                Brilho: {resultado.analise_tecnica.brilho_medio ?? '—'}
-                {' | '}
-                Contraste:{' '}
-                {resultado.analise_tecnica.contraste_global ?? '—'}
-              </Text>
-            ) : null}
           </View>
 
           {resultado.imagem_processada_url ? (
             <View style={styles.card}>
-              <Text style={styles.subtitulo}>Imagem processada</Text>
+              <Text style={styles.subtitulo}>Fotografia analisada</Text>
               <Image
                 source={{
                   uri:
@@ -687,7 +668,22 @@ export default function NovaAvaliacaoScreen() {
             </View>
           ) : null}
 
-          <Text style={styles.titulo}>Comparação das análises</Text>
+          {resultado.comparacao_multimodal?.componentes ? (
+            <View style={styles.card}>
+              <Text style={styles.subtitulo}>Comparação das análises T.I.M.E.S.</Text>
+              {Object.entries(resultado.comparacao_multimodal.componentes).map(([letra, componente]) => (
+                <View key={letra} style={styles.bloco}>
+                  <Text style={styles.rotulo}>{letra} — {componente.nome || ''}</Text>
+                  <Text style={styles.texto}>Comparação descritiva: {componente.situacao_descritiva || 'Inconclusiva'}</Text>
+                  <Text style={styles.textoMenor}>Possibilidade de avaliação: {componente.divergencia_status ? 'As análises apresentam diferenças' : 'Sem diferenças identificadas'}</Text>
+                  <Text style={styles.textoMenor}>{componente.observacao_descritiva || ''}</Text>
+                </View>
+              ))}
+              <Text style={styles.textoMenor}>Comparação auxiliar; não determina diagnóstico ou concordância clínica.</Text>
+            </View>
+          ) : null}
+
+          <Text style={styles.titulo}>Resultados das IAs</Text>
 
           {Object.entries(resultados).map(([nome, item]) => (
             <View key={nome} style={styles.card}>
@@ -696,9 +692,6 @@ export default function NovaAvaliacaoScreen() {
                 {item.sucesso ? 'SUCESSO' : 'FALHA'}
               </Text>
 
-              <Text style={styles.textoMenor}>
-                Tempo: {item.tempo_execucao_segundos?.toFixed(2) || '—'}s
-              </Text>
 
               {item.sucesso && item.resposta ? (
                 <>
@@ -715,7 +708,7 @@ export default function NovaAvaliacaoScreen() {
                 </>
               ) : (
                 <Text style={styles.erro}>
-                  {item.mensagem_erro || 'Falha sem detalhes.'}
+                  Não foi possível concluir esta análise. Tente novamente mais tarde.
                 </Text>
               )}
             </View>
@@ -730,8 +723,7 @@ export default function NovaAvaliacaoScreen() {
                 Análise selecionada: {provedorEscolhido.toUpperCase()}
               </Text>
               <Text style={styles.textoMenor}>
-                Revise e corrija a descrição antes de confirmar.
-                Esta revisão é local e ainda não é salva no servidor.
+                Confira a descrição e faça as correções necessárias antes de salvar.
               </Text>
 
               <TextInput
@@ -747,30 +739,17 @@ export default function NovaAvaliacaoScreen() {
 
               <TouchableOpacity
                 style={styles.botao}
-                onPress={() => {
-                  if (!revisao.trim()) {
-                    Alert.alert(
-                      'Revisão necessária',
-                      'Preencha a avaliação revisada.',
-                    );
-                    return;
-                  }
-                  setValidado(true);
-                  Alert.alert(
-                    'Revisão registrada nesta sessão',
-                    'A avaliação foi marcada como revisada localmente. ' +
-                      'Ainda não foi persistida em prontuário.',
-                  );
-                }}
+                onPress={salvarRevisao}
+                disabled={salvandoRevisao}
               >
-                <Text style={styles.botaoTexto}>
-                  Confirmar revisão local
-                </Text>
+                {salvandoRevisao ? <ActivityIndicator color="#fff" /> : (
+                  <Text style={styles.botaoTexto}>Salvar revisão</Text>
+                )}
               </TouchableOpacity>
 
               {validado ? (
                 <Text style={styles.sucesso}>
-                  Revisão confirmada nesta sessão.
+                  Revisão salva com sucesso.
                 </Text>
               ) : null}
             </View>
@@ -783,7 +762,7 @@ export default function NovaAvaliacaoScreen() {
             <Text style={styles.texto}>
               As respostas automatizadas podem conter erros.
               As classificações de tecidos, os percentuais,
-              as coordenadas e os tópicos de cuidado não
+              e as sugestões de cuidado não
               substituem a avaliação presencial do enfermeiro.
             </Text>
           </View>

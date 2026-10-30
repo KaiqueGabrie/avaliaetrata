@@ -1,20 +1,37 @@
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { Paciente } from '../types/paciente';
-
-const pacientesMock: Paciente[] = [
-  { id: '1', nome: 'Maria Silva Santos', cpf: '123.456.789-00', dataNascimento: '15/04/1965', telefone: '(11) 98765-4321' },
-  { id: '2', nome: 'João Pedro Oliveira', cpf: '987.654.321-11', dataNascimento: '20/08/1980', telefone: '(11) 91234-5678' },
-  { id: '3', nome: 'Ana Clara Souza', cpf: '456.789.123-22', dataNascimento: '10/01/1992', telefone: '(11) 95555-4444' },
-];
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
+import {
+  ActivityIndicator, FlatList, RefreshControl, StyleSheet,
+  Text, TextInput, TouchableOpacity, View,
+} from 'react-native';
+import { apiJson } from '../config/cliente';
+import type { Paciente } from '../types/paciente';
+import { formatarData } from '../types/paciente';
 
 export default function PacientesScreen() {
   const router = useRouter();
   const [busca, setBusca] = useState('');
+  const [pacientes, setPacientes] = useState<Paciente[]>([]);
+  const [carregando, setCarregando] = useState(true);
+  const [erro, setErro] = useState('');
 
-  const pacientesFiltrados = pacientesMock.filter((p) =>
-    p.nome.toLowerCase().includes(busca.toLowerCase()) || p.cpf.includes(busca)
+  const carregar = useCallback(async () => {
+    setCarregando(true);
+    setErro('');
+    try {
+      setPacientes(await apiJson<Paciente[]>('/pacientes'));
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Falha ao carregar pacientes.');
+    } finally {
+      setCarregando(false);
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => { void carregar(); }, [carregar]));
+
+  const filtrados = pacientes.filter((p) =>
+    p.nome_completo.toLowerCase().includes(busca.trim().toLowerCase()) ||
+    (p.cpf || '').includes(busca.trim())
   );
 
   return (
@@ -25,30 +42,30 @@ export default function PacientesScreen() {
         value={busca}
         onChangeText={setBusca}
       />
-
+      {erro ? <Text style={styles.erro}>{erro}</Text> : null}
+      {carregando && pacientes.length === 0 ? <ActivityIndicator size="large" color="#0056b3" /> : null}
       <FlatList
-        data={pacientesFiltrados}
-        keyExtractor={(item) => item.id}
+        data={filtrados}
+        keyExtractor={(item) => String(item.id_paciente)}
+        refreshControl={<RefreshControl refreshing={carregando} onRefresh={carregar} />}
         renderItem={({ item }) => (
           <TouchableOpacity
             style={styles.cardPaciente}
             activeOpacity={0.7}
-            onPress={() => router.push(`/paciente/${item.id}`)}
+            onPress={() => router.push(`/paciente/${item.id_paciente}`)}
           >
-            <View>
-              <Text style={styles.nome}>{item.nome}</Text>
-              <Text style={styles.detalhe}>CPF: {item.cpf}</Text>
-              <Text style={styles.detalhe}>Data de Nasc.: {item.dataNascimento}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.nome}>{item.nome_completo}</Text>
+              <Text style={styles.detalhe}>CPF: {item.cpf || 'Não informado'}</Text>
+              <Text style={styles.detalhe}>Data de Nasc.: {formatarData(item.data_nascimento)}</Text>
             </View>
-
             <Text style={styles.seta}>➔</Text>
           </TouchableOpacity>
         )}
-        ListEmptyComponent={
-          <Text style={styles.emptyText}>Nenhum paciente encontrado com essa busca.</Text>
-        }
+        ListEmptyComponent={!carregando && !erro ? (
+          <Text style={styles.emptyText}>Nenhum paciente encontrado.</Text>
+        ) : null}
       />
-
       <TouchableOpacity
         style={styles.btnNovoPaciente}
         activeOpacity={0.8}
@@ -68,6 +85,7 @@ const styles = StyleSheet.create({
   detalhe: { fontSize: 13, color: '#64748b' },
   seta: { fontSize: 18, color: '#0056b3', fontWeight: 'bold' },
   emptyText: { textAlign: 'center', color: '#94a3b8', marginTop: 24, fontSize: 14 },
+  erro: { color: '#b91c1c', marginBottom: 12 },
   btnNovoPaciente: { backgroundColor: '#0056b3', paddingVertical: 14, borderRadius: 8, alignItems: 'center', marginTop: 10 },
   btnNovoPacienteTexto: { color: '#fff', fontWeight: 'bold', fontSize: 15 },
 });

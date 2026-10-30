@@ -1,258 +1,97 @@
+"""API Avalia & Trata - backend/main.py (versao 2.4.1)."""
+
 import logging
-import os
-import uuid
+from copy import deepcopy
+from pathlib import Path
+from typing import Literal, Optional
+from uuid import uuid4
 
-from threading import RLock
-from typing import Dict, Literal, Optional
-from routers.pacientes import router as pacientes_router
-from routers.auth import router as auth_router
-from routers.analises import router as analises_router
-
-from fastapi import (
-    FastAPI,
-    File,
-    Form,
-    HTTPException,
-    UploadFile,
-    status,
-)
-
+from fastapi import Depends, FastAPI, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
-from pydantic import BaseModel, Field, ValidationError
-
-from services.image_processing import ImageProcessingService
-
-from services.multimodal.orchestrator import (
-    MultimodalOrchestrator,
-)
-
-from services.multimodal.comparador import (
-    comparar_resultados,
-)
-
-from services.multimodal.relatorio import (
-    gerar_relatorios,
-    selecionar_relatorio,
-    editar_campo,
-    aprovar_relatorio,
-)
-
+from database import get_db
+from models import Analise, Enfermeiro, Imagem, RelatorioIA
+from routers.auth import router as auth_router, obter_enfermeiro_atual
+from routers.pacientes import router as pacientes_router
+from routers.analises import router as analises_router
+from routers.relatorios_persistentes import router as relatorios_persistentes_router
+from routers.comparacoes import router as comparacoes_router, salvar_comparacao
 from schemas.multimodal import (
     AnaliseMultimodalInput,
     AnaliseTecnicaOpenCVInput,
     DadosClinicosInput,
-    ResultadoAnaliseMultimodal,
 )
+from services.image_processing import ImageProcessingService
+from services.multimodal.orchestrator import MultimodalOrchestrator
+from services.multimodal.comparador import comparar_resultados
+from services.multimodal.relatorio import gerar_relatorios
 
-from schemas.relatorio import (
-    ConjuntoRelatorios,
-    RelatorioIndividual,
-)
-
-
-# ============================================================
-# CONFIGURAÇÕES
-# ============================================================
-
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_DIR = BASE_DIR / "uploads"
+PROCESSED_DIR = BASE_DIR / "processed"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(
     title="API Avalia & Trata",
     description=(
-        "Sistema de apoio à documentação e análise "
-        "descritiva de feridas. Os resultados automatizados "
-        "exigem validação profissional."
+        "Sistema de apoio a documentacao e analise descritiva de feridas. "
+        "Resultados automatizados exigem validacao profissional."
     ),
-    version="2.3.0",
+    version="2.4.1",
 )
 
-app.include_router(auth_router)
-app.include_router(auth_router)
-app.include_router(pacientes_router)
+# Cada router e registrado uma unica vez.
 app.include_router(auth_router)
 app.include_router(pacientes_router)
 app.include_router(analises_router)
+app.include_router(relatorios_persistentes_router)
+app.include_router(comparacoes_router)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
-PROCESSED_DIR = os.path.join(BASE_DIR, "processed")
-
-EXTENSOES_PERMITIDAS = {
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".webp",
-}
-
-TAMANHO_MAXIMO_IMAGEM = 15 * 1024 * 1024
-
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(PROCESSED_DIR, exist_ok=True)
-
-
-# ============================================================
-# ARQUIVOS ESTÁTICOS
-# ============================================================
-
-# ATENÇÃO:
-# Estas rotas são adequadas somente ao protótipo local.
-# Não exponha imagens clínicas reais sem autenticação,
-# autorização e armazenamento protegido.
-
-app.mount(
-    "/processed",
-    StaticFiles(directory=PROCESSED_DIR),
-    name="processed",
-)
-
-app.mount(
-    "/uploads",
-    StaticFiles(directory=UPLOAD_DIR),
-    name="uploads",
-)
-
-
-# ============================================================
-# CORS
-# ============================================================
-
-# Configuração exclusiva para desenvolvimento local.
-# Restringir origens antes de publicar a aplicação.
-
+# Desenvolvimento local: ajustar para a origem real do frontend.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8081",
+        "http://127.0.0.1:8081",
+        "http://localhost:19006",
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-# ============================================================
-# SERVIÇOS
-# ============================================================
-
+# Nao publicar uploads/processed como arquivos estaticos sem controle de acesso.
 orquestrador_multimodal = MultimodalOrchestrator()
 
 
-# ============================================================
-# ARMAZENAMENTO TEMPORÁRIO DOS RELATÓRIOS
-# ============================================================
-
-# PROTÓTIPO:
-# Os relatórios ficam somente na memória do processo.
-# Não existe persistência após reiniciar o servidor.
-# Utilizar apenas um processo/worker nesta etapa.
-#
-# Futuramente, substituir por banco de dados,
-# autenticação e controle de acesso profissional.
-
-RELATORIOS_TEMPORARIOS: Dict[
-    str,
-    ConjuntoRelatorios,
-] = {}
-
-LOCK_RELATORIOS = RLock()
-
-
-# ============================================================
-# SCHEMAS PARA EDIÇÃO E APROVAÇÃO
-# ============================================================
-
-class EditarCampoRequest(BaseModel):
-    campo: str = Field(..., min_length=1)
-    novo_valor: str
-    profissional_id: str = Field(..., min_length=1)
-
-
-class AprovarRelatorioRequest(BaseModel):
-    profissional_id: str = Field(..., min_length=1)
-
-
-# ============================================================
-# FUNÇÕES AUXILIARES — IMAGEM
-# ============================================================
-
-def obter_extensao_arquivo(
-    filename: Optional[str],
-) -> str:
-
-    if not filename:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "O arquivo enviado não possui nome válido."
-            ),
-        )
-
-    extensao = os.path.splitext(filename)[1].lower()
-
-    if extensao not in EXTENSOES_PERMITIDAS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "Formato não permitido. "
-                "Utilize JPG, JPEG, PNG ou WEBP."
-            ),
-        )
-
-    return extensao
-
-
-def converter_odor(
-    valor: Optional[str],
-) -> Optional[bool]:
-
-    normalizado = (valor or "").strip().lower()
-
-    if normalizado in {
-        "true",
-        "1",
-        "sim",
-        "yes",
-    }:
-        return True
-
-    if normalizado in {
-        "false",
-        "0",
-        "nao",
-        "não",
-        "no",
-    }:
-        return False
-
-    if normalizado in {
-        "",
-        "null",
-        "none",
-        "não informado",
-        "nao informado",
-    }:
-        return None
-
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=(
-            "Valor inválido para odor. "
-            "Utilize sim, não ou deixe vazio."
-        ),
-    )
-
-
-def texto_opcional(
-    valor: Optional[str],
-) -> Optional[str]:
-
+def texto_opcional(valor: Optional[str]) -> Optional[str]:
     if valor is None:
         return None
+    return valor.strip() or None
 
-    valor = valor.strip()
 
-    return valor or None
+def converter_odor(valor: Optional[str]) -> Optional[bool]:
+    valor = (valor or "").strip().lower()
+    if valor in ("sim", "true", "1", "yes"):
+        return True
+    if valor in ("nao", "não", "false", "0", "no"):
+        return False
+    if valor in ("", "null", "none", "nao informado", "não informado"):
+        return None
+    raise HTTPException(
+        status_code=400,
+        detail="Valor invalido para odor. Use sim, nao ou vazio.",
+    )
 
 
 def montar_dados_clinicos(
@@ -265,17 +104,12 @@ def montar_dados_clinicos(
     queixaPrincipal: str,
     observacoes: str,
 ) -> DadosClinicosInput:
-
     localizacao = localizacao.strip()
-
     if not localizacao:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "A localização anatômica é obrigatória."
-            ),
+            status_code=400,
+            detail="A localizacao anatomica e obrigatoria.",
         )
-
     return DadosClinicosInput(
         localizacao=localizacao,
         comprimento=texto_opcional(comprimento),
@@ -288,749 +122,345 @@ def montar_dados_clinicos(
     )
 
 
-async def salvar_imagem_enviada(
-    file: UploadFile,
-) -> str:
-
-    extensao = obter_extensao_arquivo(
-        file.filename
-    )
-
-    conteudo = await file.read(
-        TAMANHO_MAXIMO_IMAGEM + 1
-    )
-
-    if not conteudo:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="O arquivo enviado está vazio.",
+def obter_analise_autorizada(
+    analise_id: int,
+    enfermeiro: Enfermeiro,
+    db: Session,
+) -> Analise:
+    analise = db.scalar(
+        select(Analise).where(
+            Analise.id_analise == analise_id,
+            Analise.id_enfermeiro_fk == enfermeiro.id_enfermeiro,
+            Analise.deleted_at.is_(None),
         )
-
-    if len(conteudo) > TAMANHO_MAXIMO_IMAGEM:
+    )
+    if analise is None:
         raise HTTPException(
-            status_code=(
-                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
-            ),
+            status_code=404,
+            detail="Analise nao encontrada ou acesso nao autorizado.",
+        )
+    return analise
+
+
+def resolver_caminho_imagem(caminho: str) -> str:
+    """Aceita somente imagens na pasta privada de uploads."""
+    valor = Path(caminho)
+    if valor.is_absolute():
+        candidato = valor.resolve()
+    else:
+        candidato = (BASE_DIR / valor).resolve()
+        if not candidato.is_file():
+            candidato = (BASE_DIR.parent / valor).resolve()
+    if not candidato.is_relative_to(UPLOAD_DIR.resolve()):
+        raise HTTPException(
+            status_code=400,
+            detail="O caminho da imagem nao pertence a pasta autorizada.",
+        )
+    if not candidato.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Arquivo da imagem original nao encontrado.",
+        )
+    return str(candidato)
+
+
+def obter_imagem_analise(analise_id: int, db: Session) -> Imagem:
+    imagem = db.scalar(
+        select(Imagem).where(
+            Imagem.id_analise_fk == analise_id,
+            Imagem.deleted_at.is_(None),
+        )
+    )
+    if imagem is None:
+        raise HTTPException(
+            status_code=404,
             detail=(
-                "A imagem ultrapassa o limite de 15 MB."
+                "Esta analise ainda nao possui imagem. "
+                "Envie uma imagem pela rota de analises primeiro."
             ),
         )
-
-    caminho = os.path.join(
-        UPLOAD_DIR,
-        f"{uuid.uuid4().hex}{extensao}",
-    )
-
-    with open(caminho, "wb") as arquivo:
-        arquivo.write(conteudo)
-
-    return caminho
+    return imagem
 
 
-def processar_imagem(
-    caminho_imagem_original: str,
-) -> dict:
-
-    return ImageProcessingService.processar_imagem_lesao(
-        caminho_imagem_original=caminho_imagem_original,
-        pasta_destino_processadas=PROCESSED_DIR,
-    )
-
-
-def montar_url_imagem(
-    nome_arquivo: str,
-    pasta_url: str,
-) -> str:
-
-    return f"{pasta_url}/{nome_arquivo}"
-
-
-def metadados_imagem(
-    caminho_original: str,
-    resultado_opencv: dict,
-) -> dict:
-
-    return {
-        "imagem_original_url": montar_url_imagem(
-            os.path.basename(caminho_original),
-            "/uploads",
-        ),
-        "imagem_processada_url": montar_url_imagem(
-            resultado_opencv["nome_arquivo_processado"],
-            "/processed",
-        ),
-        "dimensoes_originais": (
-            resultado_opencv["dimensoes_originais"]
-        ),
-        "dimensoes_processadas": (
-            resultado_opencv["dimensoes_processadas"]
-        ),
-        "analise_tecnica": (
-            resultado_opencv["analise_tecnica"]
-        ),
-        "processamento_aplicado": (
-            resultado_opencv["processamento_aplicado"]
-        ),
-    }
-
-
-def tratar_erro_processamento(
-    erro: Exception,
-    etapa: str,
-) -> HTTPException:
-
-    logger.exception(
-        "Falha interna durante %s.",
-        etapa,
-    )
-
-    return HTTPException(
-        status_code=(
-            status.HTTP_500_INTERNAL_SERVER_ERROR
-        ),
-        detail=(
-            f"Falha interna durante {etapa}. "
-            "Consulte os logs do servidor."
-        ),
-    )
-
-
-# ============================================================
-# COMPARAÇÃO MULTIMODAL
-# ============================================================
-
-def gerar_comparacao_segura(
-    resultado: ResultadoAnaliseMultimodal,
-) -> dict:
-
+def gerar_comparacao_segura(resultado) -> dict:
     try:
-        comparacao = comparar_resultados(
-            resultado
-        )
-
-        print(
-            "\n[COMPARADOR EXECUTADO] "
-            f"Provedores: "
-            f"{comparacao.provedores_comparados} | "
-            f"Concordantes: "
-            f"{comparacao.componentes_com_status_concordante} | "
-            f"Divergentes: "
-            f"{comparacao.componentes_com_status_divergente}",
-            flush=True,
-        )
-
-        return comparacao.model_dump(
-            mode="json"
-        )
-
+        return comparar_resultados(resultado).model_dump(mode="json")
     except Exception:
-        logger.exception(
-            "Falha durante a comparação multimodal."
-        )
-
+        logger.exception("Falha na comparacao multimodal.")
         return {
-            "versao": "1.2",
-            "erro": (
-                "A comparação automática não pôde "
-                "ser concluída. As análises individuais "
-                "continuam disponíveis."
-            ),
+            "erro": "A comparacao automatica nao foi concluida.",
             "provedores_comparados": [],
             "componentes": {},
             "validacao_profissional_necessaria": True,
         }
 
 
-# ============================================================
-# FUNÇÕES AUXILIARES — RELATÓRIOS
-# ============================================================
+def salvar_relatorios_no_banco(
+    analise_id: int,
+    conjunto,
+    db: Session,
+    provedores_com_sucesso: set[str],
+) -> dict:
+    """Persiste o conteudo interno dos relatorios sem sobrescrever revisoes."""
+    salvos = []
+    existentes = []
+    nao_salvos = []
 
-def gerar_relatorios_seguro(
-    resultado: ResultadoAnaliseMultimodal,
-    avaliacao_id: str,
-) -> Optional[ConjuntoRelatorios]:
+    for provedor, relatorio in conjunto.relatorios.items():
+        if provedor not in ("openai", "gemini", "kimi"):
+            continue
+        if provedor not in provedores_com_sucesso:
+            nao_salvos.append(provedor)
+            continue
+
+        existente = db.scalar(
+            select(RelatorioIA).where(
+                RelatorioIA.id_analise_fk == analise_id,
+                RelatorioIA.provedor == provedor,
+            )
+        )
+        if existente is not None:
+            existentes.append(provedor)
+            continue
+
+        dados_relatorio = relatorio.model_dump(mode="json")
+        conteudo_original = dados_relatorio.get("conteudo_original")
+        conteudo_editavel = dados_relatorio.get("conteudo_editavel")
+        alertas = dados_relatorio.get("alertas_validacao") or []
+
+        if (
+            not isinstance(conteudo_original, dict)
+            or not isinstance(conteudo_editavel, dict)
+            or not isinstance(alertas, (list, dict))
+        ):
+            logger.warning("Relatorio %s com estrutura inesperada.", provedor)
+            nao_salvos.append(provedor)
+            continue
+
+        registro = RelatorioIA(
+            id_relatorio=str(uuid4()),
+            id_analise_fk=analise_id,
+            provedor=provedor,
+            conteudo_original=deepcopy(conteudo_original),
+            conteudo_editavel=deepcopy(conteudo_editavel),
+            status="gerado",
+            alertas_validacao=deepcopy(alertas),
+            revisao_profissional_necessaria=True,
+        )
+        db.add(registro)
+        salvos.append(provedor)
+
+    try:
+        db.commit()
+    except IntegrityError as erro:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Conflito ao salvar relatorios. Consulte os ja existentes.",
+        ) from erro
+    except Exception as erro:
+        db.rollback()
+        logger.exception("Erro ao salvar relatorios no MySQL.")
+        raise HTTPException(
+            status_code=500,
+            detail="Falha ao salvar relatorios no banco de dados.",
+        ) from erro
+
+    return {
+        "salvos": salvos,
+        "ja_existentes": existentes,
+        "nao_salvos": nao_salvos,
+    }
+
+
+@app.get("/")
+def read_root():
+    return {
+        "status": "online",
+        "message": "API Avalia & Trata operacional.",
+        "versao": "2.4.1",
+        "modulos": {
+            "autenticacao": True,
+            "pacientes": True,
+            "anamnese": True,
+            "analises": True,
+            "opencv": True,
+            "multimodal": True,
+            "comparador": True,
+            "relatorios_mysql": True,
+            "comparacoes_mysql": True,
+            "edicao_relatorios": True,
+            "historico_edicoes": True,
+            "aprovacao_profissional": True,
+        },
+    }
+
+
+@app.post(
+    "/analises/{analise_id}/executar-multimodal",
+    tags=["Analise Multimodal"],
+)
+def executar_analise_multimodal(
+    analise_id: int,
+    localizacao: str = Form(...),
+    comprimento: str = Form(""),
+    largura: str = Form(""),
+    tipoExsudato: str = Form(""),
+    odor: str = Form(""),
+    nivelDor: str = Form(""),
+    queixaPrincipal: str = Form(""),
+    observacoes: str = Form(""),
+    provedor: Literal["gemini", "openai", "kimi", "todos"] = Form("gemini"),
+    db: Session = Depends(get_db),
+    enfermeiro: Enfermeiro = Depends(obter_enfermeiro_atual),
+):
+    obter_analise_autorizada(analise_id, enfermeiro, db)
+    imagem = obter_imagem_analise(analise_id, db)
+    caminho_original = resolver_caminho_imagem(imagem.caminho_imagem_original)
+
+    try:
+        dados_clinicos = montar_dados_clinicos(
+            localizacao=localizacao,
+            comprimento=comprimento,
+            largura=largura,
+            tipoExsudato=tipoExsudato,
+            odor=odor,
+            nivelDor=nivelDor,
+            queixaPrincipal=queixaPrincipal,
+            observacoes=observacoes,
+        )
+    except ValidationError as erro:
+        raise HTTPException(
+            status_code=400,
+            detail=erro.errors(include_url=False, include_context=False),
+        ) from erro
+
+    mapa_provedores = {
+        "gemini": ["gemini"],
+        "openai": ["openai"],
+        "kimi": ["kimi"],
+        "todos": ["gemini", "openai", "kimi"],
+    }
+    provedores_desejados = mapa_provedores[provedor]
+
+    try:
+        resultado_opencv = ImageProcessingService.processar_imagem_lesao(
+            caminho_imagem_original=caminho_original,
+            pasta_destino_processadas=str(PROCESSED_DIR),
+        )
+        caminho_processado = str(
+            PROCESSED_DIR / resultado_opencv["nome_arquivo_processado"]
+        )
+    except Exception as erro:
+        logger.exception("Falha no processamento OpenCV.")
+        raise HTTPException(
+            status_code=500,
+            detail="Falha no processamento tecnico da imagem.",
+        ) from erro
+
+    avaliacao_id = uuid4().hex
+    try:
+        entrada = AnaliseMultimodalInput(
+            avaliacao_id=avaliacao_id,
+            caminho_imagem_original=caminho_original,
+            caminho_imagem_processada=caminho_processado,
+            dimensoes_originais=resultado_opencv["dimensoes_originais"],
+            dimensoes_processadas=resultado_opencv["dimensoes_processadas"],
+            analise_tecnica=AnaliseTecnicaOpenCVInput(
+                brilho_medio=resultado_opencv["analise_tecnica"]["brilho_medio"],
+                contraste_global=resultado_opencv["analise_tecnica"]["contraste_global"],
+            ),
+            dados_clinicos=dados_clinicos,
+        )
+    except (ValidationError, ValueError) as erro:
+        logger.exception("Falha na montagem dos dados multimodais.")
+        raise HTTPException(
+            status_code=400,
+            detail="Dados de entrada multimodal invalidos.",
+        ) from erro
+
+    try:
+        resultado = orquestrador_multimodal.executar_analise_comparativa(
+            input_data=entrada,
+            provedores_desejados=provedores_desejados,
+        )
+    except Exception as erro:
+        logger.exception("Falha na execucao multimodal.")
+        raise HTTPException(
+            status_code=502,
+            detail="Falha ao executar os provedores de IA. Consulte o terminal.",
+        ) from erro
+
+    comparacao = gerar_comparacao_segura(resultado)
+
+    # So persistir respostas realmente concluidas, nunca resultados de erro.
+    provedores_com_sucesso = {
+        nome
+        for nome, resposta in resultado.resultados.items()
+        if resposta.sucesso and resposta.resposta is not None
+    }
+
+    if not provedores_com_sucesso:
+        return {
+            "sucesso": False,
+            "analise_id": analise_id,
+            "avaliacao_id": avaliacao_id,
+            "provedores_solicitados": provedores_desejados,
+            "analise_multimodal": resultado.model_dump(mode="json"),
+            "comparacao_multimodal": comparacao,
+            "persistencia_mysql": {
+                "salvos": [],
+                "ja_existentes": [],
+                "nao_salvos": provedores_desejados,
+            },
+            "relatorios_disponiveis": [],
+            "mensagem": "Nenhum provedor concluiu a analise.",
+        }
 
     try:
         conjunto = gerar_relatorios(
             resultado=resultado,
             avaliacao_id=avaliacao_id,
         )
-
-        print(
-            "\n[RELATÓRIOS GERADOS] "
-            f"Avaliação: {avaliacao_id} | "
-            f"Provedores: {list(conjunto.relatorios.keys())}",
-            flush=True,
-        )
-
-        return conjunto
-
-    except Exception:
-        logger.exception(
-            "Falha durante a geração dos relatórios."
-        )
-
-        return None
-
-
-def salvar_relatorios_temporarios(
-    avaliacao_id: str,
-    conjunto: ConjuntoRelatorios,
-) -> None:
-
-    with LOCK_RELATORIOS:
-        RELATORIOS_TEMPORARIOS[avaliacao_id] = (
-            conjunto.model_copy(deep=True)
-        )
-
-
-def obter_conjunto_relatorios(
-    avaliacao_id: str,
-) -> ConjuntoRelatorios:
-
-    with LOCK_RELATORIOS:
-        conjunto = RELATORIOS_TEMPORARIOS.get(
-            avaliacao_id
-        )
-
-        if conjunto is None:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    "Nenhum conjunto de relatórios foi "
-                    "encontrado para esta avaliação."
-                ),
-            )
-
-        return conjunto.model_copy(deep=True)
-
-
-def obter_relatorio_individual(
-    avaliacao_id: str,
-    provedor: str,
-) -> RelatorioIndividual:
-
-    conjunto = obter_conjunto_relatorios(
-        avaliacao_id
-    )
-
-    try:
-        return selecionar_relatorio(
-            conjunto,
-            provedor,
-        ).model_copy(deep=True)
-
-    except ValueError as erro:
-        raise HTTPException(
-            status_code=404,
-            detail=str(erro),
-        ) from erro
-
-
-# ============================================================
-# ROTA INICIAL
-# ============================================================
-
-@app.get("/")
-def read_root():
-
-    return {
-        "status": "online",
-        "message": (
-            "API Avalia & Trata operacional."
-        ),
-        "versao": "2.3.0",
-        "modulos": {
-            "opencv": True,
-            "multimodal": True,
-            "comparador": True,
-            "validador": True,
-            "relatorios_individuais": True,
-            "edicao_relatorios": True,
-            "aprovacao_relatorios": True,
-        },
-    }
-
-
-# ============================================================
-# ANÁLISE TÉCNICA DA IMAGEM
-# ============================================================
-
-@app.post("/analisar-imagem")
-async def analisar_imagem(
-    file: UploadFile = File(...),
-    localizacao: str = Form(...),
-    comprimento: str = Form(""),
-    largura: str = Form(""),
-    tipoExsudato: str = Form(""),
-    odor: str = Form(""),
-    nivelDor: str = Form(""),
-    queixaPrincipal: str = Form(""),
-    observacoes: str = Form(""),
-):
-
-    try:
-        dados_clinicos = montar_dados_clinicos(
-            localizacao,
-            comprimento,
-            largura,
-            tipoExsudato,
-            odor,
-            nivelDor,
-            queixaPrincipal,
-            observacoes,
-        )
-
-        caminho_original = (
-            await salvar_imagem_enviada(file)
-        )
-
-        resultado_opencv = processar_imagem(
-            caminho_original
-        )
-
-        return {
-            "sucesso": True,
-            "mensagem": (
-                "Imagem recebida e processada "
-                "tecnicamente. Nenhum diagnóstico "
-                "clínico foi realizado."
-            ),
-            **metadados_imagem(
-                caminho_original,
-                resultado_opencv,
-            ),
-            "dados_clinicos": (
-                dados_clinicos.model_dump()
-            ),
-        }
-
-    except HTTPException:
-        raise
-
-    except (
-        ValueError,
-        ValidationError,
-    ) as erro:
-        raise HTTPException(
-            status_code=400,
-            detail=str(erro),
-        ) from erro
-
     except Exception as erro:
-        raise tratar_erro_processamento(
-            erro,
-            "o processamento da imagem",
-        ) from erro
-
-    finally:
-        await file.close()
-
-
-# ============================================================
-# ANÁLISE MULTIMODAL + COMPARAÇÃO + RELATÓRIOS
-# ============================================================
-
-@app.post("/preparar-analise-multimodal")
-async def preparar_analise_multimodal(
-    file: UploadFile = File(...),
-    localizacao: str = Form(...),
-    comprimento: str = Form(""),
-    largura: str = Form(""),
-    tipoExsudato: str = Form(""),
-    odor: str = Form(""),
-    nivelDor: str = Form(""),
-    queixaPrincipal: str = Form(""),
-    observacoes: str = Form(""),
-    provedor: Literal[
-        "gemini",
-        "openai",
-        "kimi",
-        "todos",
-    ] = Form("gemini"),
-):
-
-    try:
-        provedores_disponiveis = {
-            "gemini": ["gemini"],
-            "openai": ["openai"],
-            "kimi": ["kimi"],
-            "todos": [
-                "gemini",
-                "openai",
-                "kimi",
-            ],
-        }
-
-        provedores_desejados = (
-            provedores_disponiveis[provedor]
-        )
-
-        dados_clinicos = montar_dados_clinicos(
-            localizacao,
-            comprimento,
-            largura,
-            tipoExsudato,
-            odor,
-            nivelDor,
-            queixaPrincipal,
-            observacoes,
-        )
-
-        caminho_original = (
-            await salvar_imagem_enviada(file)
-        )
-
-        resultado_opencv = processar_imagem(
-            caminho_original
-        )
-
-        caminho_processado = os.path.join(
-            PROCESSED_DIR,
-            resultado_opencv[
-                "nome_arquivo_processado"
-            ],
-        )
-
-        avaliacao_id = uuid.uuid4().hex
-
-        input_multimodal = AnaliseMultimodalInput(
-            avaliacao_id=avaliacao_id,
-            caminho_imagem_original=caminho_original,
-            caminho_imagem_processada=caminho_processado,
-            dimensoes_originais=(
-                resultado_opencv["dimensoes_originais"]
-            ),
-            dimensoes_processadas=(
-                resultado_opencv["dimensoes_processadas"]
-            ),
-            analise_tecnica=AnaliseTecnicaOpenCVInput(
-                brilho_medio=(
-                    resultado_opencv[
-                        "analise_tecnica"
-                    ]["brilho_medio"]
-                ),
-                contraste_global=(
-                    resultado_opencv[
-                        "analise_tecnica"
-                    ]["contraste_global"]
-                ),
-            ),
-            dados_clinicos=dados_clinicos,
-        )
-
-        # ----------------------------------------------------
-        # 1. EXECUÇÃO DAS IAS
-        # ----------------------------------------------------
-
-        resultado: ResultadoAnaliseMultimodal = (
-            orquestrador_multimodal.executar_analise_comparativa(
-                input_data=input_multimodal,
-                provedores_desejados=(
-                    provedores_desejados
-                ),
-            )
-        )
-
-        # ----------------------------------------------------
-        # 2. COMPARAÇÃO MULTIMODAL
-        # ----------------------------------------------------
-
-        comparacao = gerar_comparacao_segura(
-            resultado
-        )
-
-        # ----------------------------------------------------
-        # 3. GERAÇÃO DOS RELATÓRIOS INDIVIDUAIS
-        # ----------------------------------------------------
-
-        conjunto_relatorios = gerar_relatorios_seguro(
-            resultado=resultado,
-            avaliacao_id=avaliacao_id,
-        )
-
-        relatorios_json = None
-
-        if conjunto_relatorios is not None:
-
-            # Mantém a comparação já calculada
-            # pela rota principal como referência.
-            # Evita apresentar duas comparações
-            # diferentes no retorno.
-            conjunto_relatorios.comparacao = comparacao
-
-            salvar_relatorios_temporarios(
-                avaliacao_id,
-                conjunto_relatorios,
-            )
-
-            relatorios_json = (
-                conjunto_relatorios.model_dump(
-                    mode="json"
-                )
-            )
-
-        # ----------------------------------------------------
-        # 4. RETORNO DA API
-        # ----------------------------------------------------
-
-        return {
-            "sucesso": resultado.sucesso_geral,
-            "avaliacao_id": avaliacao_id,
-            "mensagem": (
-                "Pelo menos um provedor concluiu "
-                "a análise; os resultados exigem "
-                "revisão profissional."
-                if resultado.sucesso_geral
-                else (
-                    "Nenhum provedor concluiu "
-                    "a análise. Consulte os "
-                    "erros individuais."
-                )
-            ),
-            "provedor_selecionado": provedor,
-            "provedores_solicitados": (
-                provedores_desejados
-            ),
-            **metadados_imagem(
-                caminho_original,
-                resultado_opencv,
-            ),
-            "dados_clinicos": (
-                dados_clinicos.model_dump()
-            ),
-            "analise_multimodal": (
-                resultado.model_dump(
-                    mode="json"
-                )
-            ),
-            "comparacao_multimodal": comparacao,
-            "relatorios_individuais": relatorios_json,
-            "relatorios_disponiveis": (
-                list(conjunto_relatorios.relatorios.keys())
-                if conjunto_relatorios is not None
-                else []
-            ),
-            "aviso": (
-                "Análise automatizada auxiliar, "
-                "sujeita a erro. Não confirma "
-                "diagnóstico, infecção, profundidade, "
-                "fase de cicatrização, tipos de tecido "
-                "ou medidas físicas. Marcações e "
-                "percentuais sugeridos exigem "
-                "conferência do enfermeiro."
-            ),
-        }
-
-    except HTTPException:
-        raise
-
-    except (
-        ValueError,
-        ValidationError,
-    ) as erro:
+        logger.exception("Falha na geracao dos relatorios.")
         raise HTTPException(
-            status_code=400,
-            detail=str(erro),
+            status_code=500,
+            detail="Falha ao gerar relatorios individuais.",
         ) from erro
 
-    except Exception as erro:
-        raise tratar_erro_processamento(
-            erro,
-            "a análise multimodal",
-        ) from erro
+    persistencia = salvar_relatorios_no_banco(
+        analise_id=analise_id,
+        conjunto=conjunto,
+        db=db,
+        provedores_com_sucesso=provedores_com_sucesso,
+    )
 
-    finally:
-        await file.close()
-
-
-# ============================================================
-# CONSULTAR TODOS OS RELATÓRIOS DE UMA AVALIAÇÃO
-# ============================================================
-
-@app.get("/relatorios/{avaliacao_id}")
-def consultar_relatorios(
-    avaliacao_id: str,
-):
-
-    conjunto = obter_conjunto_relatorios(
-        avaliacao_id
+    persistencia_comparacao = salvar_comparacao(
+        db=db,
+        analise_id=analise_id,
+        avaliacao_id=avaliacao_id,
+        comparacao=comparacao,
+        provedores_com_sucesso=provedores_com_sucesso,
     )
 
     return {
-        "sucesso": True,
+        "sucesso": resultado.sucesso_geral,
+        "analise_id": analise_id,
         "avaliacao_id": avaliacao_id,
-        "dados": conjunto.model_dump(
-            mode="json"
-        ),
-    }
-
-
-# ============================================================
-# CONSULTAR RELATÓRIO DE UMA IA
-# ============================================================
-
-@app.get("/relatorios/{avaliacao_id}/{provedor}")
-def consultar_relatorio_individual(
-    avaliacao_id: str,
-    provedor: str,
-):
-
-    relatorio = obter_relatorio_individual(
-        avaliacao_id,
-        provedor,
-    )
-
-    return {
-        "sucesso": True,
-        "avaliacao_id": avaliacao_id,
-        "provedor": provedor,
-        "relatorio": relatorio.model_dump(
-            mode="json"
-        ),
-    }
-
-
-# ============================================================
-# EDITAR RELATÓRIO SELECIONADO
-# ============================================================
-
-@app.patch("/relatorios/{avaliacao_id}/{provedor}")
-def editar_relatorio_endpoint(
-    avaliacao_id: str,
-    provedor: str,
-    dados: EditarCampoRequest,
-):
-
-    with LOCK_RELATORIOS:
-
-        conjunto = RELATORIOS_TEMPORARIOS.get(
-            avaliacao_id
-        )
-
-        if conjunto is None:
-            raise HTTPException(
-                status_code=404,
-                detail="Avaliação não encontrada.",
-            )
-
-        if provedor not in conjunto.relatorios:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"Relatório do provedor "
-                    f"'{provedor}' não encontrado."
-                ),
-            )
-
-        relatorio_atual = (
-            conjunto.relatorios[provedor]
-        )
-
-        try:
-            relatorio_editado = editar_campo(
-                relatorio=relatorio_atual,
-                campo=dados.campo,
-                novo_valor=dados.novo_valor,
-                profissional_id=dados.profissional_id,
-            )
-
-        except ValueError as erro:
-            raise HTTPException(
-                status_code=400,
-                detail=str(erro),
-            ) from erro
-
-        # Substitui apenas a cópia editável
-        # daquele provedor.
-        # A resposta original permanece preservada.
-
-        conjunto.relatorios[provedor] = (
-            relatorio_editado
-        )
-
-        retorno = relatorio_editado.model_dump(
-            mode="json"
-        )
-
-    return {
-        "sucesso": True,
+        "provedor_selecionado": provedor,
+        "provedores_solicitados": provedores_desejados,
+        "analise_multimodal": resultado.model_dump(mode="json"),
+        "comparacao_multimodal": comparacao,
+        "persistencia_mysql": persistencia,
+        "persistencia_comparacao": persistencia_comparacao,
+        "relatorios_disponiveis": list(conjunto.relatorios.keys()),
         "mensagem": (
-            "Campo atualizado com sucesso. "
-            "A análise original foi preservada."
+            "Processamento concluido. Consulte os relatorios persistentes "
+            "para verificar os resultados."
         ),
-        "avaliacao_id": avaliacao_id,
-        "provedor": provedor,
-        "relatorio": retorno,
-    }
-
-
-# ============================================================
-# APROVAR RELATÓRIO SELECIONADO
-# ============================================================
-
-@app.post(
-    "/relatorios/{avaliacao_id}/{provedor}/aprovar"
-)
-def aprovar_relatorio_endpoint(
-    avaliacao_id: str,
-    provedor: str,
-    dados: AprovarRelatorioRequest,
-):
-
-    with LOCK_RELATORIOS:
-
-        conjunto = RELATORIOS_TEMPORARIOS.get(
-            avaliacao_id
-        )
-
-        if conjunto is None:
-            raise HTTPException(
-                status_code=404,
-                detail="Avaliação não encontrada.",
-            )
-
-        if provedor not in conjunto.relatorios:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"Relatório do provedor "
-                    f"'{provedor}' não encontrado."
-                ),
-            )
-
-        relatorio_atual = (
-            conjunto.relatorios[provedor]
-        )
-
-        try:
-            relatorio_aprovado = aprovar_relatorio(
-                relatorio=relatorio_atual,
-                profissional_id=dados.profissional_id,
-            )
-
-        except ValueError as erro:
-            raise HTTPException(
-                status_code=400,
-                detail=str(erro),
-            ) from erro
-
-        conjunto.relatorios[provedor] = (
-            relatorio_aprovado
-        )
-
-        retorno = relatorio_aprovado.model_dump(
-            mode="json"
-        )
-
-    return {
-        "sucesso": True,
-        "mensagem": (
-            "Relatório aprovado pelo profissional. "
-            "A versão aprovada está bloqueada "
-            "para novas edições."
+        "aviso": (
+            "Resultados auxiliares, sujeitos a erro e a revisao profissional. "
+            "A imagem nao confirma isoladamente diagnostico ou medidas fisicas."
         ),
-        "avaliacao_id": avaliacao_id,
-        "provedor": provedor,
-        "relatorio": retorno,
     }

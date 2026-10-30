@@ -17,7 +17,7 @@ export default function HomeScreen() {
         <Text style={styles.cardIcon}>👥</Text>
         <View style={styles.cardTextContainer}>
           <Text style={styles.cardTitle}>Lista de Pacientes</Text>
-          <Text style={styles.cardDescription}>Visualizar, buscar e gerenciar o prontuário dos pacientes.</Text>
+          <Text style={styles.cardDescription}>Consulte os cadastros e acompanhe as avaliações realizadas.</Text>
         </View>
       </TouchableOpacity>
 
@@ -29,19 +29,19 @@ export default function HomeScreen() {
         <Text style={styles.cardIcon}>➕</Text>
         <View style={styles.cardTextContainer}>
           <Text style={styles.cardTitle}>Cadastrar Novo Paciente</Text>
-          <Text style={styles.cardDescription}>Registrar novos dados cadastrais e histórico no sistema.</Text>
+          <Text style={styles.cardDescription}>Registre as informações de identificação do paciente.</Text>
         </View>
       </TouchableOpacity>
 
       <TouchableOpacity
         style={styles.card}
         activeOpacity={0.7}
-        onPress={() => router.push('/avaliacao/nova?pacienteId=1')}
+        onPress={() => router.push('/pacientes')}
       >
         <Text style={styles.cardIcon}>📋</Text>
         <View style={styles.cardTextContainer}>
           <Text style={styles.cardTitle}>Nova Avaliação Clínica</Text>
-          <Text style={styles.cardDescription}>Capturar fotos de lesões e enviar dados para análise do backend.</Text>
+          <Text style={styles.cardDescription}>Selecione um paciente para registrar e analisar uma lesão.</Text>
         </View>
       </TouchableOpacity>
 
@@ -52,8 +52,8 @@ export default function HomeScreen() {
       >
         <Text style={styles.cardIcon}>⚙️</Text>
         <View style={styles.cardTextContainer}>
-          <Text style={styles.cardTitle}>Explorar Recurso & Testes</Text>
-          <Text style={styles.cardDescription}>Verificar testes adicionais e configurações do sistema.</Text>
+          <Text style={styles.cardTitle}>Orientações de uso</Text>
+          <Text style={styles.cardDescription}>Saiba como registrar e revisar uma avaliação com segurança.</Text>
         </View>
       </TouchableOpacity>
     </ScrollView>

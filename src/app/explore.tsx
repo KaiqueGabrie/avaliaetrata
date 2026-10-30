@@ -3,9 +3,9 @@ import { ScrollView, StyleSheet, Text } from 'react-native';
 export default function ExploreScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Explorar Recursos do Sistema</Text>
+      <Text style={styles.title}>Orientações de uso</Text>
       <Text style={styles.text}>
-        Esta tela é destinada para configurações adicionais, testes de módulo de inteligência artificial e visualização de parâmetros técnicos do aplicativo.
+        Cadastre o paciente, abra seu prontuário e inicie uma nova avaliação. Registre as observações clínicas e uma fotografia adequada. Confira os resultados apresentados, corrija o que for necessário e aprove o relatório somente após sua revisão profissional. As análises automatizadas são auxiliares e não substituem o julgamento clínico.
       </Text>
     </ScrollView>
   );

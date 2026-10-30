@@ -314,6 +314,16 @@ CREATE TABLE IF NOT EXISTS log_auditoria (
     INDEX idx_log_entidade (entidade, registro_id)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS comparacoes_multimodais (
+    id_comparacao VARCHAR(36) NOT NULL,
+    id_analise_fk INT NOT NULL,
+    avaliacao_id VARCHAR(64) NOT NULL,
+    provedores_comparados JSON NOT NULL,
+    conteudo JSON NOT NULL,
+    criado_em DATETIME NOT NULL,
+    PRIMARY KEY (id_comparacao)
+);
+
 -- ============================================================
 -- VERIFICACAO FINAL
 -- ============================================================
