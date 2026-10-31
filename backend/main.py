@@ -1,5 +1,6 @@
 """API Avalia & Trata - backend/main.py (versao 2.4.1)."""
 
+import os
 import logging
 from copy import deepcopy
 from pathlib import Path
@@ -55,16 +56,24 @@ app.include_router(analises_router)
 app.include_router(relatorios_persistentes_router)
 app.include_router(comparacoes_router)
 
-# Desenvolvimento local: ajustar para a origem real do frontend.
+# Origens permitidas para o frontend.
+origens_locais = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8081",
+    "http://127.0.0.1:8081",
+    "http://localhost:19006",
+]
+
+origens_producao = [
+    origem.strip().rstrip("/")
+    for origem in os.getenv("FRONTEND_URL", "").split(",")
+    if origem.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8081",
-        "http://127.0.0.1:8081",
-        "http://localhost:19006",
-    ],
+    allow_origins=origens_locais + origens_producao,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

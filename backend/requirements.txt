@@ -1,6 +1,17 @@
+
 fastapi
 uvicorn[standard]
 python-multipart
 pydantic
+email-validator
+sqlalchemy>=2.0,<3.0
+pymysql
+cryptography
+python-dotenv
+PyJWT
+pwdlib[argon2]
 opencv-python-headless
 numpy
+Pillow
+google-genai
+openai
