@@ -46,6 +46,18 @@ export default function HomeScreen() {
       </TouchableOpacity>
 
       <TouchableOpacity
+        style={styles.card}
+        activeOpacity={0.7}
+        onPress={() => router.push('/perfil')}
+      >
+        <Text style={styles.cardIcon}>👩‍⚕️</Text>
+        <View style={styles.cardTextContainer}>
+          <Text style={styles.cardTitle}>Meu Perfil</Text>
+          <Text style={styles.cardDescription}>Consulte e atualize seus dados profissionais ou saia da conta.</Text>
+        </View>
+      </TouchableOpacity>
+
+      <TouchableOpacity
         style={[styles.card, { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }]}
         activeOpacity={0.7}
         onPress={() => router.push('/explore')}

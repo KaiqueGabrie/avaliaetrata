@@ -16,6 +16,7 @@ export default function Layout() {
       <Stack.Screen name="paciente/[id]" options={{ title: 'Prontuário do Paciente' }} />
       <Stack.Screen name="avaliacao/nova" options={{ title: 'Nova Avaliação' }} />
       <Stack.Screen name="avaliacao/[id]" options={{ title: 'Relatórios da Avaliação' }} />
+      <Stack.Screen name="perfil" options={{ title: 'Meu Perfil' }} />
       <Stack.Screen name="explore" options={{ title: 'Orientações de Uso' }} />
     </Stack>
   );

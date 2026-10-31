@@ -73,3 +73,42 @@ class TokenResposta(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+
+
+class AtualizacaoPerfilEnfermeiro(BaseModel):
+    nome: str = Field(min_length=3, max_length=150)
+    email: str = Field(min_length=5, max_length=150)
+    cpf: str
+    data_nascimento: date | None = None
+    telefone: str | None = Field(default=None, max_length=20)
+    registro_coren: str | None = Field(default=None, max_length=30)
+    instituicao_saude: str | None = Field(default=None, max_length=150)
+
+    @field_validator("nome")
+    @classmethod
+    def validar_nome(cls, valor: str) -> str:
+        valor = valor.strip()
+        if len(valor) < 3:
+            raise ValueError("Informe um nome valido.")
+        return valor
+
+    @field_validator("email")
+    @classmethod
+    def validar_email(cls, valor: str) -> str:
+        return CadastroEnfermeiro.validar_email(valor)
+
+    @field_validator("cpf")
+    @classmethod
+    def validar_cpf(cls, valor: str) -> str:
+        return CadastroEnfermeiro.validar_cpf(valor)
+
+    @field_validator("telefone", "registro_coren", "instituicao_saude")
+    @classmethod
+    def limpar_opcional(cls, valor: str | None) -> str | None:
+        return valor.strip() or None if valor is not None else None
+
+
+class PerfilEnfermeiroResposta(EnfermeiroResposta):
+    data_nascimento: date | None = None
+    telefone: str | None = None
+    instituicao_saude: str | None = None
