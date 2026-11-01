@@ -1,10 +1,10 @@
 
 import { useRouter } from 'expo-router';
-import * as SecureStore from 'expo-secure-store';
 import { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   StyleSheet,
   Text,
   TextInput,
@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 
 import { API_URL } from '../config/api';
+import { salvarToken } from '../utils/tokenStorage';
 
 export default function WelcomeScreen() {
   const router = useRouter();
@@ -20,10 +21,21 @@ export default function WelcomeScreen() {
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
   const [carregando, setCarregando] = useState(false);
+  const [mensagemErro, setMensagemErro] = useState('');
+
+  const mostrarErro = (titulo: string, mensagem: string) => {
+    if (Platform.OS === 'web') {
+      setMensagemErro(mensagem);
+    } else {
+      Alert.alert(titulo, mensagem);
+    }
+  };
 
   const handleLogin = async () => {
+    setMensagemErro('');
+
     if (!email.trim() || !senha) {
-      Alert.alert(
+      mostrarErro(
         'Campos obrigatórios',
         'Informe seu e-mail e sua senha.'
       );
@@ -47,9 +59,12 @@ export default function WelcomeScreen() {
 
       if (!resposta.ok) {
         if (resposta.status === 401 || resposta.status === 403) {
-          Alert.alert('Erro no login', 'E-mail ou senha inválidos.');
+          mostrarErro(
+            'Erro no login',
+            'E-mail ou senha inválidos.'
+          );
         } else {
-          Alert.alert(
+          mostrarErro(
             'Erro no login',
             'Não foi possível entrar no momento. Tente novamente.'
           );
@@ -59,24 +74,24 @@ export default function WelcomeScreen() {
 
       const dados = await resposta.json();
 
-      if (!dados.access_token) {
-        Alert.alert(
+      if (
+        typeof dados.access_token !== 'string' ||
+        !dados.access_token
+      ) {
+        mostrarErro(
           'Erro',
           'Não foi possível concluir o acesso. Tente novamente.'
         );
         return;
       }
 
-      await SecureStore.setItemAsync(
-        'access_token',
-        dados.access_token
-      );
+      await salvarToken('access_token', dados.access_token);
 
       router.replace('/home');
     } catch (erro) {
       console.error('Erro ao realizar login:', erro);
 
-      Alert.alert(
+      mostrarErro(
         'Erro de conexão',
         'Não foi possível acessar o sistema. Verifique sua conexão e tente novamente.'
       );
@@ -114,7 +129,14 @@ export default function WelcomeScreen() {
           value={senha}
           onChangeText={setSenha}
           editable={!carregando}
+          onSubmitEditing={handleLogin}
         />
+
+        {mensagemErro ? (
+          <Text style={styles.errorText}>
+            {mensagemErro}
+          </Text>
+        ) : null}
 
         <TouchableOpacity
           style={[
@@ -179,6 +201,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     backgroundColor: '#fafafa',
     marginBottom: 14,
+  },
+  errorText: {
+    color: '#b91c1c',
+    fontSize: 14,
+    marginBottom: 12,
   },
   button: {
     backgroundColor: '#0056b3',
