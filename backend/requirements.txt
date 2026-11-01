@@ -1,4 +1,3 @@
-
 fastapi
 uvicorn[standard]
 python-multipart
@@ -15,3 +14,4 @@ numpy
 Pillow
 google-genai
 openai
+supabase>=2,<3

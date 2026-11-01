@@ -3,6 +3,7 @@
 import os
 import logging
 from copy import deepcopy
+from tempfile import TemporaryDirectory
 from pathlib import Path
 from typing import Literal, Optional
 from uuid import uuid4
@@ -27,6 +28,7 @@ from schemas.multimodal import (
     DadosClinicosInput,
 )
 from services.image_processing import ImageProcessingService
+from services.storage import PREFIXO_STORAGE, baixar_original
 from services.multimodal.orchestrator import MultimodalOrchestrator
 from services.multimodal.comparador import comparar_resultados
 from services.multimodal.relatorio import gerar_relatorios
@@ -70,7 +72,6 @@ origens_producao = [
     for origem in os.getenv("FRONTEND_URL", "").split(",")
     if origem.strip()
 ]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origens_locais + origens_producao,
@@ -151,8 +152,24 @@ def obter_analise_autorizada(
     return analise
 
 
-def resolver_caminho_imagem(caminho: str) -> str:
-    """Aceita somente imagens na pasta privada de uploads."""
+def resolver_caminho_imagem(caminho: str, pasta_temporaria: Path) -> str:
+    """Busca imagem privada no Supabase ou valida arquivo local antigo."""
+    if caminho.startswith(PREFIXO_STORAGE):
+        chave = caminho[len(PREFIXO_STORAGE):]
+        extensao = Path(chave).suffix.lower()
+        if extensao not in (".jpg", ".jpeg", ".png", ".webp"):
+            raise HTTPException(status_code=400, detail="Formato de imagem invalido.")
+        destino = pasta_temporaria / f"{uuid4().hex}{extensao}"
+        try:
+            baixar_original(chave, destino)
+        except Exception as erro:
+            logger.exception("Falha ao recuperar imagem privada do Supabase.")
+            raise HTTPException(
+                status_code=502,
+                detail="Nao foi possivel recuperar a imagem armazenada.",
+            ) from erro
+        return str(destino)
+
     valor = Path(caminho)
     if valor.is_absolute():
         candidato = valor.resolve()
@@ -171,6 +188,12 @@ def resolver_caminho_imagem(caminho: str) -> str:
             detail="Arquivo da imagem original nao encontrado.",
         )
     return str(candidato)
+
+
+def obter_pasta_temporaria():
+    """Limpa imagens baixadas e processadas ao terminar a requisicao."""
+    with TemporaryDirectory(prefix="avalia_trata_") as pasta:
+        yield Path(pasta)
 
 
 def obter_imagem_analise(analise_id: int, db: Session) -> Imagem:
@@ -322,10 +345,13 @@ def executar_analise_multimodal(
     provedor: Literal["gemini", "openai", "kimi", "todos"] = Form("gemini"),
     db: Session = Depends(get_db),
     enfermeiro: Enfermeiro = Depends(obter_enfermeiro_atual),
+    pasta_temporaria: Path = Depends(obter_pasta_temporaria),
 ):
     obter_analise_autorizada(analise_id, enfermeiro, db)
     imagem = obter_imagem_analise(analise_id, db)
-    caminho_original = resolver_caminho_imagem(imagem.caminho_imagem_original)
+    caminho_original = resolver_caminho_imagem(
+        imagem.caminho_imagem_original, pasta_temporaria
+    )
 
     try:
         dados_clinicos = montar_dados_clinicos(
@@ -355,10 +381,10 @@ def executar_analise_multimodal(
     try:
         resultado_opencv = ImageProcessingService.processar_imagem_lesao(
             caminho_imagem_original=caminho_original,
-            pasta_destino_processadas=str(PROCESSED_DIR),
+            pasta_destino_processadas=str(pasta_temporaria),
         )
         caminho_processado = str(
-            PROCESSED_DIR / resultado_opencv["nome_arquivo_processado"]
+            pasta_temporaria / resultado_opencv["nome_arquivo_processado"]
         )
     except Exception as erro:
         logger.exception("Falha no processamento OpenCV.")

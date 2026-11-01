@@ -37,6 +37,10 @@ from schemas.analise import (
 )
 
 from services.image_processing import ImageProcessingService
+from services.storage import (
+    storage_ativo, criar_chave, enviar_arquivo,
+    remover_remotos, url_assinada,
+)
 
 
 # ============================================================
@@ -459,236 +463,133 @@ async def enviar_imagem_analise(
     analise_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    enfermeiro: Enfermeiro = Depends(
-        obter_enfermeiro_atual
-    ),
+    enfermeiro: Enfermeiro = Depends(obter_enfermeiro_atual),
 ):
-
     caminho_original = None
     caminho_processado = None
+    chaves_remotas = []
+    commit_concluido = False
+    usar_storage = False
 
     try:
-        analise = obter_analise_autorizada(
-            paciente_id,
-            analise_id,
-            enfermeiro,
-            db,
-        )
-
+        analise = obter_analise_autorizada(paciente_id, analise_id, enfermeiro, db)
         if analise.status != "pendente":
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "Esta analise nao esta pendente "
-                    "e nao pode receber imagem."
-                ),
+                detail="Esta analise nao esta pendente e nao pode receber imagem.",
             )
-
         imagem_existente = db.scalar(
-            select(Imagem).where(
-                Imagem.id_analise_fk == analise_id
-            )
+            select(Imagem).where(Imagem.id_analise_fk == analise_id)
         )
-
         if imagem_existente is not None:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "Esta analise ja possui imagem. "
-                    "Crie outra analise para "
-                    "registrar uma nova avaliacao."
-                ),
+                detail="Esta analise ja possui imagem. Crie outra analise.",
             )
 
-        # ----------------------------------------------------
-        # 1. SALVAR IMAGEM ORIGINAL
-        # ----------------------------------------------------
-
-        caminho_original = await salvar_upload(
-            file
+        # O OpenCV continua trabalhando em arquivos temporarios locais.
+        caminho_original = await salvar_upload(file)
+        resultado_opencv = ImageProcessingService.processar_imagem_lesao(
+            caminho_imagem_original=str(caminho_original),
+            pasta_destino_processadas=str(PROCESSED_DIR),
         )
-
-        # ----------------------------------------------------
-        # 2. EXECUTAR OPENCV EXISTENTE
-        # ----------------------------------------------------
-
-        resultado_opencv = (
-            ImageProcessingService
-            .processar_imagem_lesao(
-                caminho_imagem_original=str(
-                    caminho_original
-                ),
-                pasta_destino_processadas=str(
-                    PROCESSED_DIR
-                ),
-            )
-        )
-
-        nome_processado = resultado_opencv[
-            "nome_arquivo_processado"
-        ]
-
-        # O servico deve devolver apenas o nome
-        # do arquivo gerado dentro de processed.
+        nome_processado = resultado_opencv["nome_arquivo_processado"]
         if (
             not isinstance(nome_processado, str)
             or not nome_processado
             or Path(nome_processado).name != nome_processado
         ):
-            raise ValueError(
-                "Nome de arquivo processado invalido."
-            )
-
-        caminho_processado = (
-            PROCESSED_DIR / nome_processado
-        )
-
+            raise ValueError("Nome de arquivo processado invalido.")
+        caminho_processado = PROCESSED_DIR / nome_processado
         if not caminho_processado.is_file():
-            raise ValueError(
-                "Imagem processada nao foi encontrada."
-            )
+            raise ValueError("Imagem processada nao encontrada.")
 
-        # ----------------------------------------------------
-        # 3. SALVAR REGISTRO NA TABELA IMAGEM
-        # ----------------------------------------------------
+        usar_storage = storage_ativo()
+        if usar_storage:
+            chave_original = criar_chave(
+                "originais", enfermeiro.id_enfermeiro,
+                paciente_id, analise_id, caminho_original.suffix,
+            )
+            chave_processada = criar_chave(
+                "processadas", enfermeiro.id_enfermeiro,
+                paciente_id, analise_id, caminho_processado.suffix,
+            )
+            caminho_original_db = enviar_arquivo(caminho_original, chave_original)
+            chaves_remotas.append(chave_original)
+            caminho_processado_db = enviar_arquivo(caminho_processado, chave_processada)
+            chaves_remotas.append(chave_processada)
+        else:
+            # Mantem compatibilidade com o MySQL e os arquivos locais.
+            caminho_original_db = f"uploads/{caminho_original.name}"
+            caminho_processado_db = f"processed/{caminho_processado.name}"
 
         imagem = Imagem(
             id_analise_fk=analise_id,
-            caminho_imagem_original=(
-                f"uploads/{caminho_original.name}"
-            ),
-            caminho_imagem_marcada=(
-                f"processed/{caminho_processado.name}"
-            ),
+            caminho_imagem_original=caminho_original_db,
+            caminho_imagem_marcada=caminho_processado_db,
         )
-
         db.add(imagem)
 
-        # ----------------------------------------------------
-        # 4. REGISTRAR METADADOS TECNICOS
-        # ----------------------------------------------------
-
-        contexto_atual = dict(
-            analise.contexto_clinico_json or {}
-        )
-
+        contexto_atual = dict(analise.contexto_clinico_json or {})
         contexto_atual["processamento_opencv"] = {
-            "dimensoes_originais": (
-                resultado_opencv.get(
-                    "dimensoes_originais"
-                )
-            ),
-            "dimensoes_processadas": (
-                resultado_opencv.get(
-                    "dimensoes_processadas"
-                )
-            ),
-            "analise_tecnica": (
-                resultado_opencv.get(
-                    "analise_tecnica"
-                )
-            ),
-            "processamento_aplicado": (
-                resultado_opencv.get(
-                    "processamento_aplicado"
-                )
-            ),
+            "dimensoes_originais": resultado_opencv.get("dimensoes_originais"),
+            "dimensoes_processadas": resultado_opencv.get("dimensoes_processadas"),
+            "analise_tecnica": resultado_opencv.get("analise_tecnica"),
+            "processamento_aplicado": resultado_opencv.get("processamento_aplicado"),
         }
-
-        analise.contexto_clinico_json = (
-            contexto_atual
-        )
-
-        # O OpenCV atual nao fornece uma area
-        # fisica validada nem percentuais de
-        # tecidos clinicamente confirmados.
-        #
-        # Por isso, nao preenchemos:
-        # area_estimada
-        # tecido_granulacao
-        # tecido_esfacelo
-        # tecido_necrose
-
+        analise.contexto_clinico_json = contexto_atual
+        # O processamento nao equivale a diagnostico nem mede area fisica validada.
         analise.status = "concluida"
-
         db.flush()
-
         registrar_log(
-            db,
-            enfermeiro.id_enfermeiro,
-            "PROCESSAMENTO_IMAGEM",
-            analise.id_analise,
+            db, enfermeiro.id_enfermeiro,
+            "PROCESSAMENTO_IMAGEM", analise.id_analise,
         )
-
         salvar_alteracoes(db)
-
+        commit_concluido = True
         db.refresh(analise)
         db.refresh(imagem)
 
-        # ----------------------------------------------------
-        # 5. RETORNO
-        # ----------------------------------------------------
+        if usar_storage:
+            url_original = url_assinada(chave_original)
+            url_processada = url_assinada(chave_processada)
+        else:
+            url_original = f"/uploads/{caminho_original.name}"
+            url_processada = f"/processed/{caminho_processado.name}"
 
         return {
             "sucesso": True,
             "mensagem": (
-                "Imagem processada e vinculada "
-                "a analise com sucesso. "
-                "Nenhum diagnostico clinico "
-                "foi realizado."
+                "Imagem processada e vinculada a analise com sucesso. "
+                "Nenhum diagnostico clinico foi realizado."
             ),
             "id_paciente": paciente_id,
             "id_analise": analise.id_analise,
             "id_imagem": imagem.id_imagem,
             "status_analise": analise.status,
-            "imagem_original_url": (
-                f"/uploads/{caminho_original.name}"
-            ),
-            "imagem_processada_url": (
-                f"/processed/{caminho_processado.name}"
-            ),
-            "analise_tecnica": (
-                resultado_opencv.get(
-                    "analise_tecnica"
-                )
-            ),
-            "processamento_aplicado": (
-                resultado_opencv.get(
-                    "processamento_aplicado"
-                )
-            ),
-            "aviso": (
-                "Resultados automatizados "
-                "exigem revisao profissional."
-            ),
+            "imagem_original_url": url_original,
+            "imagem_processada_url": url_processada,
+            "analise_tecnica": resultado_opencv.get("analise_tecnica"),
+            "processamento_aplicado": resultado_opencv.get("processamento_aplicado"),
+            "aviso": "Resultados automatizados exigem revisao profissional.",
         }
-
     except HTTPException:
         db.rollback()
-
-        remover_arquivo(caminho_original)
-        remover_arquivo(caminho_processado)
-
+        if not commit_concluido:
+            remover_remotos(chaves_remotas)
         raise
-
     except Exception as erro:
         db.rollback()
-
-        remover_arquivo(caminho_original)
-        remover_arquivo(caminho_processado)
-
-        logger.exception(
-            "Falha ao processar imagem da analise %s.",
-            analise_id,
-        )
-
+        if not commit_concluido:
+            remover_remotos(chaves_remotas)
+        logger.exception("Falha ao processar imagem da analise %s.", analise_id)
         raise HTTPException(
             status_code=500,
-            detail=(
-                "Falha interna durante o "
-                "processamento da imagem."
-            ),
+            detail="Falha interna durante o processamento da imagem.",
         ) from erro
-
     finally:
+        # No Render, os arquivos locais nao devem ser usados como persistencia.
+        if usar_storage:
+            remover_arquivo(caminho_original)
+            remover_arquivo(caminho_processado)
         await file.close()
