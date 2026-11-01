@@ -1,10 +1,11 @@
 import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
-  ActivityIndicator, Alert, ScrollView, StyleSheet, Text,
+  ActivityIndicator, ScrollView, StyleSheet, Text,
   TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { apiJson } from '../../config/cliente';
+import { Aviso } from '../../utils/avisos';
 
 type Relatorio = {
   id_relatorio: string;
@@ -72,22 +73,22 @@ export default function DetalheAvaliacaoScreen() {
         method: 'PATCH', body: JSON.stringify({ campo: 'conteudo_descricao', novo_valor: descricao.trim() }),
       });
       await carregar();
-      Alert.alert('Salvo', 'Revisão salva com sucesso.');
-    } catch (e) { Alert.alert('Erro', e instanceof Error ? e.message : 'Falha ao salvar.'); }
+      Aviso.alert('Salvo', 'Revisão salva com sucesso.');
+    } catch (e) { Aviso.alert('Erro', e instanceof Error ? e.message : 'Falha ao salvar.'); }
     finally { setSalvando(false); }
   };
 
   const aprovar = () => {
     if (!relatorioAtual || relatorioAtual.status === 'aprovado') return;
-    Alert.alert('Confirmar aprovação', 'Você revisou o relatório e deseja aprová-lo como profissional responsável?', [
+    Aviso.alert('Confirmar aprovação', 'Você revisou o relatório e deseja aprová-lo como profissional responsável?', [
       { text: 'Cancelar', style: 'cancel' },
       { text: 'Aprovar', onPress: async () => {
         setSalvando(true);
         try {
           await apiJson(`/analises/${id}/relatorios/${selecionado}/aprovar`, { method: 'POST' });
           await carregar();
-          Alert.alert('Aprovado', 'Relatório aprovado com sucesso.');
-        } catch (e) { Alert.alert('Erro', e instanceof Error ? e.message : 'Falha ao aprovar.'); }
+          Aviso.alert('Aprovado', 'Relatório aprovado com sucesso.');
+        } catch (e) { Aviso.alert('Erro', e instanceof Error ? e.message : 'Falha ao aprovar.'); }
         finally { setSalvando(false); }
       } },
     ]);

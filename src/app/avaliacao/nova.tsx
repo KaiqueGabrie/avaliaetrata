@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
+  Platform,
   Image,
   ScrollView,
   StyleSheet,
@@ -19,6 +19,7 @@ import { obterToken, mensagemErro, apiJson } from '../../config/cliente';
 import { fetch as expoFetch } from 'expo/fetch';
 
 import { API_URL } from '../../config/api';
+import { Aviso } from '../../utils/avisos';
 import {
   RespostaEstruturadaIA,
   ResultadoProvedorIA,
@@ -343,6 +344,7 @@ export default function NovaAvaliacaoScreen() {
   const [observacoes, setObservacoes] = useState('');
 
   const [imagemUri, setImagemUri] = useState<string | null>(null);
+  const [imagemAsset, setImagemAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [provedor, setProvedor] = useState<Provedor>('todos');
   const [resultado, setResultado] = useState<RespostaAPI | null>(null);
   const [carregando, setCarregando] = useState(false);
@@ -364,13 +366,20 @@ export default function NovaAvaliacaoScreen() {
 
   const selecionarImagem = async (camera: boolean) => {
     try {
-      const permissao = camera
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync();
-
-      if (!permissao.granted) {
-        Alert.alert('Permissão necessária', 'Autorize o acesso à imagem.');
+      if (Platform.OS === 'web' && camera) {
+        Aviso.alert('Câmera', 'No navegador, selecione a fotografia usando a opção da galeria.');
         return;
+      }
+
+      if (Platform.OS !== 'web') {
+        const permissao = camera
+          ? await ImagePicker.requestCameraPermissionsAsync()
+          : await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+        if (!permissao.granted) {
+          Aviso.alert('Permissão necessária', 'Autorize o acesso à imagem.');
+          return;
+        }
       }
 
       const selecao = camera
@@ -387,10 +396,11 @@ export default function NovaAvaliacaoScreen() {
 
       if (!selecao.canceled && selecao.assets[0]?.uri) {
         setImagemUri(selecao.assets[0].uri);
+        setImagemAsset(selecao.assets[0]);
         limpar();
       }
     } catch (erro) {
-      Alert.alert(
+      Aviso.alert(
         'Erro na imagem',
         erro instanceof Error ? erro.message : 'Erro desconhecido',
       );
@@ -399,15 +409,15 @@ export default function NovaAvaliacaoScreen() {
 
   const analisar = async () => {
     if (!pacienteId || !/^\d+$/.test(pacienteId)) {
-      Alert.alert('Paciente obrigatório', 'Abra a avaliação a partir do prontuário de um paciente.');
+      Aviso.alert('Paciente obrigatório', 'Abra a avaliação a partir do prontuário de um paciente.');
       return;
     }
     if (!localizacao.trim() || !imagemUri) {
-      Alert.alert('Dados obrigatórios', 'Informe a localização e selecione uma fotografia.');
+      Aviso.alert('Dados obrigatórios', 'Informe a localização e selecione uma fotografia.');
       return;
     }
     if (nivelDor.trim() && (!Number.isFinite(Number(nivelDor)) || Number(nivelDor) < 0 || Number(nivelDor) > 10)) {
-      Alert.alert('Dor inválida', 'Informe um valor entre 0 e 10.');
+      Aviso.alert('Dor inválida', 'Informe um valor entre 0 e 10.');
       return;
     }
 
@@ -415,8 +425,6 @@ export default function NovaAvaliacaoScreen() {
     limpar();
     let analiseId: number | null = null;
     try {
-      const arquivo = new File(imagemUri);
-      if (!arquivo.exists) throw new Error('Arquivo da fotografia não encontrado.');
       const token = await obterToken();
 
       // 1. Cria uma avaliação pendente associada ao paciente.
@@ -438,13 +446,32 @@ export default function NovaAvaliacaoScreen() {
       // 2. Envia a foto; o backend executa OpenCV e vincula a imagem.
       setStatusApi('2/3 — Registrando fotografia...');
       const foto = new FormData();
-      const extensao = imagemUri.toLowerCase().split('?')[0].split('.').pop();
-      const tipo = extensao === 'png' ? 'image/png' : extensao === 'webp' ? 'image/webp' : 'image/jpeg';
-      foto.append('file', arquivo as unknown as Blob, `lesao.${tipo.split('/')[1]}`);
-      const respostaFoto = await expoFetch(
-        `${API_URL}/pacientes/${pacienteId}/analises/${analiseId}/imagem`,
-        { method: 'POST', headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }, body: foto }
-      );
+      const extensao = imagemAsset?.fileName?.toLowerCase().split('.').pop()
+        || imagemUri.toLowerCase().split('?')[0].split('.').pop();
+      const tipo = imagemAsset?.mimeType
+        || (extensao === 'png' ? 'image/png' : extensao === 'webp' ? 'image/webp' : 'image/jpeg');
+      const nomeArquivo = `lesao.${tipo.split('/')[1] || 'jpeg'}`;
+
+      if (Platform.OS === 'web') {
+        // O Expo ImagePicker disponibiliza um File real no navegador.
+        // O fallback cobre versões que retornam somente uma URI blob/data.
+        const arquivoWeb = imagemAsset?.file ?? await (await fetch(imagemUri)).blob();
+        foto.append('file', arquivoWeb, nomeArquivo);
+      } else {
+        const arquivoNativo = new File(imagemUri);
+        if (!arquivoNativo.exists) throw new Error('Arquivo da fotografia não encontrado.');
+        foto.append('file', arquivoNativo as unknown as Blob, nomeArquivo);
+      }
+
+      const urlFoto = `${API_URL}/pacientes/${pacienteId}/analises/${analiseId}/imagem`;
+      const opcoesFoto = {
+        method: 'POST',
+        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+        body: foto,
+      };
+      const respostaFoto = Platform.OS === 'web'
+        ? await fetch(urlFoto, opcoesFoto)
+        : await expoFetch(urlFoto, opcoesFoto);
       if (!respostaFoto.ok) throw new Error(await mensagemErro(respostaFoto as Response));
       const dadosFoto = await respostaFoto.json();
 
@@ -460,13 +487,18 @@ export default function NovaAvaliacaoScreen() {
       formulario.append('queixaPrincipal', queixaPrincipal.trim());
       formulario.append('observacoes', observacoes.trim());
       formulario.append('provedor', provedor);
-      const resposta = await expoFetch(
-        `${API_URL}/analises/${analiseId}/executar-multimodal`,
-        { method: 'POST', headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }, body: formulario }
-      );
+      const urlAnalise = `${API_URL}/analises/${analiseId}/executar-multimodal`;
+      const opcoesAnalise = {
+        method: 'POST',
+        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+        body: formulario,
+      };
+      const resposta = Platform.OS === 'web'
+        ? await fetch(urlAnalise, opcoesAnalise)
+        : await expoFetch(urlAnalise, opcoesAnalise);
       if (!resposta.ok) throw new Error(await mensagemErro(resposta as Response));
       const dados = await resposta.json() as RespostaAPI;
-      setResultado({ ...dados, analise_id: analiseId, imagem_processada_url: undefined,
+      setResultado({ ...dados, analise_id: analiseId, imagem_processada_url: dados.imagem_processada_url,
         analise_tecnica: dadosFoto.analise_tecnica });
       const lista = Object.values(dados.analise_multimodal?.resultados || {});
       const sucessos = lista.filter((item) => item.sucesso).length;
@@ -477,13 +509,13 @@ export default function NovaAvaliacaoScreen() {
       setStatusApi(analiseId
         ? 'Não foi possível concluir a análise. Consulte o prontuário antes de tentar novamente.'
         : 'Erro ao criar avaliação.');
-      Alert.alert('Não foi possível concluir', 'Confira sua conexão e os dados informados. Se o problema continuar, tente novamente mais tarde.');
+      Aviso.alert('Não foi possível concluir', 'Confira sua conexão e os dados informados. Se o problema continuar, tente novamente mais tarde.');
     } finally { setCarregando(false); }
   };
 
   const salvarRevisao = async () => {
     if (!resultado?.analise_id || !provedorEscolhido || !revisao.trim()) {
-      Alert.alert('Revisão necessária', 'Selecione uma análise e preencha a descrição revisada.');
+      Aviso.alert('Revisão necessária', 'Selecione uma análise e preencha a descrição revisada.');
       return;
     }
     setSalvandoRevisao(true);
@@ -493,9 +525,9 @@ export default function NovaAvaliacaoScreen() {
         body: JSON.stringify({ campo: 'conteudo_descricao', novo_valor: revisao.trim() }),
       });
       setValidado(true);
-      Alert.alert('Revisão salva', 'Revisão salva com sucesso.');
+      Aviso.alert('Revisão salva', 'Revisão salva com sucesso.');
     } catch (e) {
-      Alert.alert('Erro ao salvar revisão', e instanceof Error ? e.message : 'Falha desconhecida.');
+      Aviso.alert('Erro ao salvar revisão', e instanceof Error ? e.message : 'Falha desconhecida.');
     } finally { setSalvandoRevisao(false); }
   };
 
@@ -655,12 +687,9 @@ export default function NovaAvaliacaoScreen() {
               <Text style={styles.subtitulo}>Fotografia analisada</Text>
               <Image
                 source={{
-                  uri:
-                    API_URL +
-                    (resultado.imagem_processada_url.startsWith('/')
-                      ? ''
-                      : '/') +
-                    resultado.imagem_processada_url,
+                  uri: /^https?:\/\//i.test(resultado.imagem_processada_url)
+                    ? resultado.imagem_processada_url
+                    : `${API_URL}${resultado.imagem_processada_url.startsWith('/') ? '' : '/'}${resultado.imagem_processada_url}`,
                 }}
                 style={styles.imagem}
                 resizeMode="contain"

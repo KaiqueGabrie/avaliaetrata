@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'expo-router';
-import * as SecureStore from 'expo-secure-store';
 import {
-  ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput,
+  ActivityIndicator, ScrollView, StyleSheet, Text, TextInput,
   TouchableOpacity, View,
 } from 'react-native';
 import { apiJson } from '../config/cliente';
+import { removerToken } from '../utils/tokenStorage';
+import { Aviso } from '../utils/avisos';
 
 type Perfil = {
   id_enfermeiro: number;
@@ -45,6 +46,7 @@ export default function PerfilScreen() {
   const [campos, setCampos] = useState<Campos | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [salvando, setSalvando] = useState(false);
+  const [erroCarregamento, setErroCarregamento] = useState('');
 
   useEffect(() => {
     let ativo = true;
@@ -53,7 +55,7 @@ export default function PerfilScreen() {
         const perfil = await apiJson<Perfil>('/auth/me');
         if (ativo) setCampos(camposDoPerfil(perfil));
       } catch (erro) {
-        if (ativo) Alert.alert('Não foi possível carregar o perfil', erro instanceof Error ? erro.message : 'Tente novamente.');
+        if (ativo) setErroCarregamento(erro instanceof Error ? erro.message : 'Não foi possível carregar o perfil.');
       } finally {
         if (ativo) setCarregando(false);
       }
@@ -69,11 +71,11 @@ export default function PerfilScreen() {
   async function salvar() {
     if (!campos || salvando) return;
     if (!campos.nome.trim() || !campos.email.trim() || !campos.cpf.trim()) {
-      Alert.alert('Campos obrigatórios', 'Preencha nome, e-mail e CPF.');
+      Aviso.alert('Campos obrigatórios', 'Preencha nome, e-mail e CPF.');
       return;
     }
     if (campos.data_nascimento.trim() && !/^\d{4}-\d{2}-\d{2}$/.test(campos.data_nascimento.trim())) {
-      Alert.alert('Data inválida', 'Informe a data de nascimento no formato AAAA-MM-DD.');
+      Aviso.alert('Data inválida', 'Informe a data de nascimento no formato AAAA-MM-DD.');
       return;
     }
     setSalvando(true);
@@ -91,26 +93,26 @@ export default function PerfilScreen() {
         }),
       });
       setCampos(camposDoPerfil(perfil));
-      Alert.alert('Perfil atualizado', 'Suas informações foram salvas com sucesso.');
+      Aviso.alert('Perfil atualizado', 'Suas informações foram salvas com sucesso.');
     } catch (erro) {
-      Alert.alert('Não foi possível salvar', erro instanceof Error ? erro.message : 'Tente novamente.');
+      Aviso.alert('Não foi possível salvar', erro instanceof Error ? erro.message : 'Tente novamente.');
     } finally {
       setSalvando(false);
     }
   }
 
   function sair() {
-    Alert.alert('Sair da conta', 'Deseja encerrar sua sessão neste dispositivo?', [
+    Aviso.alert('Sair da conta', 'Deseja encerrar sua sessão neste dispositivo?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Sair', style: 'destructive',
         onPress: async () => {
           try {
-            await SecureStore.deleteItemAsync('access_token');
+            await removerToken('access_token');
             router.dismissAll();
             router.replace('/');
           } catch {
-            Alert.alert('Erro', 'Não foi possível encerrar a sessão. Tente novamente.');
+            Aviso.alert('Erro', 'Não foi possível encerrar a sessão. Tente novamente.');
           }
         },
       },
@@ -121,7 +123,7 @@ export default function PerfilScreen() {
     return <View style={styles.center}><ActivityIndicator size="large" color="#0056b3" /><Text style={styles.helper}>Carregando seus dados...</Text></View>;
   }
   if (!campos) {
-    return <View style={styles.center}><Text>Perfil indisponível. Volte e tente novamente.</Text></View>;
+    return <View style={styles.center}><Text style={styles.erro}>{erroCarregamento || 'Perfil indisponível. Volte e tente novamente.'}</Text></View>;
   }
 
   const camposFormulario: { chave: keyof Campos; titulo: string; dica?: string; tipo?: 'email-address' | 'numeric' | 'phone-pad' }[] = [
@@ -176,6 +178,7 @@ const styles = StyleSheet.create({
   field: { marginBottom: 15 },
   label: { color: '#334155', fontWeight: '600', fontSize: 14, marginBottom: 6 },
   input: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, padding: 12, fontSize: 15, color: '#0f172a' },
+  erro: { color: '#b91c1c', textAlign: 'center' },
   helper: { color: '#64748b', fontSize: 12, marginTop: 6, marginBottom: 12 },
   button: { backgroundColor: '#0056b3', padding: 15, borderRadius: 8, alignItems: 'center' },
   buttonText: { color: '#fff', fontWeight: '700', fontSize: 16 },

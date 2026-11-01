@@ -1,8 +1,8 @@
-import * as SecureStore from 'expo-secure-store';
+import { obterToken as lerToken } from '../utils/tokenStorage';
 import { API_URL } from './api';
 
 export async function obterToken(): Promise<string> {
-  const token = await SecureStore.getItemAsync('access_token');
+  const token = await lerToken('access_token');
   if (!token) throw new Error('Sessão não encontrada. Volte ao início e faça login.');
   return token;
 }

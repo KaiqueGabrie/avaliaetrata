@@ -1,10 +1,8 @@
 
 import { useRouter } from 'expo-router';
-import * as SecureStore from 'expo-secure-store';
 import { useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,6 +11,8 @@ import {
 } from 'react-native';
 
 import { API_URL } from '../../config/api';
+import { obterToken } from '../../config/cliente';
+import { Aviso } from '../../utils/avisos';
 
 export default function NovoPacienteScreen() {
   const router = useRouter();
@@ -28,7 +28,7 @@ export default function NovoPacienteScreen() {
 
   const handleSalvar = async () => {
     if (!nome.trim() || !cpf.trim()) {
-      Alert.alert(
+      Aviso.alert(
         'Campos obrigatórios',
         'Informe pelo menos o nome e o CPF do paciente.'
       );
@@ -41,7 +41,7 @@ export default function NovoPacienteScreen() {
       const partes = dataNascimento.trim().split('/');
 
       if (partes.length !== 3) {
-        Alert.alert(
+        Aviso.alert(
           'Data inválida',
           'Informe a data no formato DD/MM/AAAA.'
         );
@@ -55,7 +55,7 @@ export default function NovoPacienteScreen() {
         !/^\d{2}$/.test(mes) ||
         !/^\d{4}$/.test(ano)
       ) {
-        Alert.alert(
+        Aviso.alert(
           'Data inválida',
           'Informe a data no formato DD/MM/AAAA.'
         );
@@ -73,7 +73,7 @@ export default function NovoPacienteScreen() {
         data.getMonth() !== Number(mes) - 1 ||
         data.getDate() !== Number(dia)
       ) {
-        Alert.alert(
+        Aviso.alert(
           'Data inválida',
           'Informe uma data de nascimento válida.'
         );
@@ -86,15 +86,7 @@ export default function NovoPacienteScreen() {
     setSalvando(true);
 
     try {
-      const token = await SecureStore.getItemAsync('access_token');
-
-      if (!token) {
-        Alert.alert(
-          'Sessão não encontrada',
-          'Faça login novamente para cadastrar pacientes.'
-        );
-        return;
-      }
+      const token = await obterToken();
 
       const paciente = {
         nome_completo: nome.trim(),
@@ -118,7 +110,7 @@ export default function NovoPacienteScreen() {
       });
 
       if (resposta.status === 401 || resposta.status === 403) {
-        Alert.alert(
+        Aviso.alert(
           'Sessão inválida',
           'Sua sessão expirou ou você não tem permissão. Faça login novamente.'
         );
@@ -131,11 +123,11 @@ export default function NovoPacienteScreen() {
           : resposta.status === 422
             ? 'Confira os dados informados e tente novamente.'
             : 'Não foi possível concluir o cadastro. Tente novamente.';
-        Alert.alert('Não foi possível cadastrar', mensagem);
+        Aviso.alert('Não foi possível cadastrar', mensagem);
         return;
       }
 
-      Alert.alert(
+      Aviso.alert(
         'Sucesso',
         'Paciente cadastrado com sucesso!',
         [
@@ -148,9 +140,9 @@ export default function NovoPacienteScreen() {
     } catch (erro) {
       console.error('Erro ao cadastrar paciente:', erro);
 
-      Alert.alert(
-        'Erro de conexão',
-        'Não foi possível concluir o cadastro. Verifique sua conexão e tente novamente.'
+      Aviso.alert(
+        'Não foi possível cadastrar',
+        erro instanceof Error ? erro.message : 'Verifique sua conexão e tente novamente.'
       );
     } finally {
       setSalvando(false);
