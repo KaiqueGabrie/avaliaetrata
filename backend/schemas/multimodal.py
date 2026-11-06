@@ -76,6 +76,8 @@ class MedidasLesao(SchemaBase):
     comprimento_informado_cm: Optional[str] = None
     largura_informada_cm: Optional[str] = None
     area_calculada_cm2: Optional[float] = Field(default=None, ge=0)
+    area_retangulo_delimitador_cm2: Optional[float] = Field(default=None, ge=0)
+    area_elipse_aproximada_cm2: Optional[float] = Field(default=None, ge=0)
     metodo_medicao: Optional[str] = None
     observacoes: List[str] = Field(default_factory=list)
 

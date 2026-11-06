@@ -53,6 +53,8 @@ export interface RespostaEstruturadaIA {
     comprimento_informado_cm: string | null;
     largura_informada_cm: string | null;
     area_calculada_cm2: number | null;
+    area_retangulo_delimitador_cm2?: number | null;
+    area_elipse_aproximada_cm2?: number | null;
     metodo_medicao: string | null;
     observacoes: string[];
   };

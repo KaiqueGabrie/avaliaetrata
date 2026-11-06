@@ -21,14 +21,12 @@ import { fetch as expoFetch } from 'expo/fetch';
 import { API_URL } from '../../config/api';
 import { Aviso } from '../../utils/avisos';
 import FotografiasAvaliacao, { ImagensAvaliacao } from '../../components/fotografias-avaliacao';
-import {
-  RespostaEstruturadaIA,
-  ResultadoProvedorIA,
-} from '../../types/ia';
+import RelatorioCompleto from '../../components/relatorio-completo';
+import { ResultadoProvedorIA } from '../../types/ia';
 
 type Provedor = 'gemini' | 'openai' | 'kimi' | 'todos';
 
-type RespostaAPI = {
+type RespostaAPI = ImagensAvaliacao & {
   sucesso: boolean;
   mensagem: string;
   analise_id: number;
@@ -62,50 +60,6 @@ const PROVEDORES: { valor: Provedor; titulo: string }[] = [
   { valor: 'kimi', titulo: 'Kimi' },
 ];
 
-const TIMES = [
-  ['T', 'Tecido'],
-  ['I', 'Inflamação / Infecção'],
-  ['M', 'Umidade'],
-  ['E', 'Bordas'],
-  ['S', 'Pele ao redor'],
-];
-
-function Lista({
-  titulo,
-  itens,
-}: {
-  titulo?: string;
-  itens?: string[];
-}) {
-  if (!itens?.length) return null;
-
-  return (
-    <View style={styles.grupo}>
-      {titulo ? <Text style={styles.rotulo}>{titulo}</Text> : null}
-      {itens.map((item, indice) => (
-        <Text key={indice} style={styles.texto}>
-          {'\u2022'} {item}
-        </Text>
-      ))}
-    </View>
-  );
-}
-
-function Secao({
-  titulo,
-  children,
-}: {
-  titulo: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <View style={styles.secaoInterna}>
-      <Text style={styles.subtitulo}>{titulo}</Text>
-      {children}
-    </View>
-  );
-}
-
 function Campo({
   titulo,
   valor,
@@ -130,204 +84,6 @@ function Campo({
         placeholder={placeholder}
         keyboardType="default"
       />
-    </View>
-  );
-}
-
-function ResultadoEstruturado({
-  resposta,
-}: {
-  resposta: RespostaEstruturadaIA;
-}) {
-  const tecidos = resposta.avaliacao_tecidos;
-  const marcacoes = resposta.marcacoes_imagem;
-  const plano = resposta.plano_cuidados_proposto;
-
-  return (
-    <View>
-      <Secao titulo="Descrição geral">
-        <Text style={styles.texto}>
-          {resposta.conteudo_descricao || 'Não informada.'}
-        </Text>
-      </Secao>
-
-      <Secao titulo="Qualidade da fotografia">
-        <Text style={styles.texto}>
-          Estado: {resposta.qualidade_imagem?.status || 'Não avaliado'}
-        </Text>
-        <Lista itens={resposta.qualidade_imagem?.observacoes} />
-        <Lista
-          titulo="Limitações"
-          itens={resposta.qualidade_imagem?.limitacoes}
-        />
-      </Secao>
-
-      <Secao titulo="Características visuais">
-        {resposta.caracteristicas_visuais?.length ? (
-          resposta.caracteristicas_visuais.map((item, indice) => (
-            <View key={indice} style={styles.bloco}>
-              <Text style={styles.rotulo}>{item.caracteristica}</Text>
-              <Text style={styles.texto}>{item.descricao}</Text>
-              <Text style={styles.textoMenor}>
-                Avaliação: {item.status}
-                {item.confianca_autodeclarada
-                  ? ` | Confiança declarada: ${item.confianca_autodeclarada}`
-                  : ''}
-              </Text>
-              {item.justificativa ? (
-                <Text style={styles.textoMenor}>
-                  {item.justificativa}
-                </Text>
-              ) : null}
-            </View>
-          ))
-        ) : (
-          <Text style={styles.textoMenor}>
-            Sem características estruturadas disponíveis.
-          </Text>
-        )}
-      </Secao>
-
-      <Secao titulo="Avaliação T.I.M.E.S.">
-        {TIMES.map(([letra, titulo]) => {
-          const componente = resposta.avaliacao_times?.find(
-            (item) => item.componente === letra,
-          );
-
-          return (
-            <View key={letra} style={styles.bloco}>
-              <Text style={styles.rotulo}>
-                {letra} — {titulo}
-              </Text>
-              <Text style={styles.textoMenor}>
-                Estado: {componente?.status || 'Não avaliado'}
-              </Text>
-              <Lista
-                titulo="Observações visuais"
-                itens={componente?.observacoes_visuais}
-              />
-              <Lista
-                titulo="Dados clínicos relacionados"
-                itens={componente?.dados_clinicos_relacionados}
-              />
-              <Lista
-                titulo="Informações pendentes"
-                itens={componente?.informacoes_pendentes}
-              />
-              <Lista
-                titulo="Limitações"
-                itens={componente?.limitacoes}
-              />
-            </View>
-          );
-        })}
-      </Secao>
-
-      <Secao titulo="Caracterização dos tecidos">
-        <Text style={styles.textoMenor}>
-          Estado: {tecidos?.status || 'Não avaliado'}
-        </Text>
-
-        {tecidos?.tecidos?.length ? (
-          tecidos.tecidos.map((tecido, indice) => (
-            <View key={indice} style={styles.bloco}>
-              <Text style={styles.rotulo}>{tecido.tipo}</Text>
-              <Text style={styles.texto}>
-                {tecido.descricao_visual}
-              </Text>
-              <Text style={styles.texto}>
-                Percentual estimado:{' '}
-                {tecido.percentual_estimado == null
-                  ? 'Não estimado'
-                  : `${tecido.percentual_estimado}%`}
-              </Text>
-              <Text style={styles.textoMenor}>
-                Confiança declarada:{' '}
-                {tecido.confianca_autodeclarada || 'Não informada'}
-              </Text>
-              {tecido.justificativa ? (
-                <Text style={styles.textoMenor}>
-                  {tecido.justificativa}
-                </Text>
-              ) : null}
-            </View>
-          ))
-        ) : (
-          <Text style={styles.textoMenor}>
-            Nenhuma classificação visual de tecido disponível.
-          </Text>
-        )}
-
-        <Lista itens={tecidos?.limitacoes} />
-      </Secao>
-
-      <Secao titulo="Medidas da lesão">
-        <Text style={styles.texto}>
-          Comprimento informado:{' '}
-          {resposta.medidas?.comprimento_informado_cm || '—'} cm
-        </Text>
-        <Text style={styles.texto}>
-          Largura informada:{' '}
-          {resposta.medidas?.largura_informada_cm || '—'} cm
-        </Text>
-        <Text style={styles.texto}>
-          Área calculada:{' '}
-          {resposta.medidas?.area_calculada_cm2 == null
-            ? 'Não calculada'
-            : `${resposta.medidas.area_calculada_cm2} cm²`}
-        </Text>
-        <Text style={styles.textoMenor}>
-          Método: {resposta.medidas?.metodo_medicao || 'Não informado'}
-        </Text>
-        <Lista itens={resposta.medidas?.observacoes} />
-      </Secao>
-
-      <Secao titulo="Regiões observadas na fotografia">
-        {marcacoes?.regioes?.length ? (
-          marcacoes.regioes.map((regiao, indice) => (
-            <View key={indice} style={styles.bloco}>
-              <Text style={styles.rotulo}>{regiao.rotulo}</Text>
-              <Text style={styles.texto}>{regiao.descricao}</Text>
-            </View>
-          ))
-        ) : (
-          <Text style={styles.textoMenor}>
-            Nenhuma região delimitada com confiança suficiente.
-          </Text>
-        )}
-
-        <Lista itens={marcacoes?.limitacoes} />
-      </Secao>
-
-      <Secao titulo="Pontos de cuidado para revisão profissional">
-        {plano?.sugestoes?.length ? (
-          plano.sugestoes.map((sugestao, indice) => (
-            <View key={indice} style={styles.bloco}>
-              <Text style={styles.rotulo}>{sugestao.titulo}</Text>
-              <Text style={styles.texto}>
-                {sugestao.justificativa}
-              </Text>
-              <Lista
-                titulo="Dados a confirmar"
-                itens={sugestao.dados_a_confirmar}
-              />
-            </View>
-          ))
-        ) : (
-          <Text style={styles.textoMenor}>
-            Nenhum tópico adicional foi proposto.
-          </Text>
-        )}
-        <Lista itens={plano?.observacoes} />
-      </Secao>
-
-      <Secao titulo="Pontos para revisão profissional">
-        <Lista itens={resposta.pontos_para_revisao_profissional} />
-      </Secao>
-
-      <Secao titulo="Limitações gerais">
-        <Lista itens={resposta.limitacoes_declaradas} />
-      </Secao>
     </View>
   );
 }
@@ -357,6 +113,7 @@ export default function NovaAvaliacaoScreen() {
   const [revisao, setRevisao] = useState('');
   const [validado, setValidado] = useState(false);
   const [salvandoRevisao, setSalvandoRevisao] = useState(false);
+  const [gerandoMarcacoes, setGerandoMarcacoes] = useState(false);
 
   const resultados = resultado?.analise_multimodal?.resultados || {};
 
@@ -486,6 +243,7 @@ export default function NovaAvaliacaoScreen() {
         imagem_original_url: dadosFoto.imagem_original_url ?? null,
         imagem_processada_url: dadosFoto.imagem_processada_url ?? null,
         imagem_bordas_url: dadosFoto.imagem_bordas_url ?? null,
+        medidas_geometricas: dadosFoto.medidas_geometricas,
         analise_tecnica: dadosFoto.analise_tecnica,
       });
 
@@ -518,8 +276,21 @@ export default function NovaAvaliacaoScreen() {
         imagem_original_url: dadosFoto.imagem_original_url ?? null,
         imagem_processada_url: dadosFoto.imagem_processada_url ?? null,
         imagem_bordas_url: dadosFoto.imagem_bordas_url ?? null,
+        medidas_geometricas: dados.medidas_geometricas ?? dadosFoto.medidas_geometricas,
         analise_tecnica: dadosFoto.analise_tecnica,
       });
+      // Gera imagens a partir dos polígonos já persistidos, sem chamar as IAs novamente.
+      try {
+        setGerandoMarcacoes(true);
+        const visualizacoes = await apiJson<{ marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'] }>(
+          `/pacientes/${pacienteId}/analises/${analiseId}/marcacoes/gerar`,
+          { method: 'POST' },
+        );
+        setResultado(anterior => anterior ? { ...anterior, ...visualizacoes } : anterior);
+      } catch {
+        // Não invalida a análise clínica se a visualização opcional falhar.
+        // O usuário pode tentar novamente no botão da seção de fotografias.
+      } finally { setGerandoMarcacoes(false); }
       const lista = Object.values(dados.analise_multimodal?.resultados || {});
       const sucessos = lista.filter((item) => item.sucesso).length;
       setStatusApi(sucessos > 0
@@ -536,13 +307,30 @@ export default function NovaAvaliacaoScreen() {
   const atualizarFotografias = async () => {
     if (!resultado?.analise_id || !pacienteId) return;
     try {
-      const imagens = await apiJson<ImagensAvaliacao>(
-        `/pacientes/${pacienteId}/analises/${resultado.analise_id}/imagens`
-      );
-      setResultado((anterior) => anterior ? { ...anterior, ...imagens } : anterior);
+      const [imagens, visualizacoes] = await Promise.all([
+        apiJson<ImagensAvaliacao>(`/pacientes/${pacienteId}/analises/${resultado.analise_id}/imagens`),
+        apiJson<{ marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'] }>(
+          `/pacientes/${pacienteId}/analises/${resultado.analise_id}/marcacoes`,
+        ).catch(() => null),
+      ]);
+      setResultado(anterior => anterior ? { ...anterior, ...imagens, ...(visualizacoes || {}) } : anterior);
     } catch (e) {
       Aviso.alert('Fotografias', e instanceof Error ? e.message : 'Não foi possível atualizar as imagens.');
     }
+  };
+
+  const gerarMarcacoes = async () => {
+    if (!resultado?.analise_id || !pacienteId) return;
+    setGerandoMarcacoes(true);
+    try {
+      const dados = await apiJson<{ marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'] }>(
+        `/pacientes/${pacienteId}/analises/${resultado.analise_id}/marcacoes/gerar`,
+        { method: 'POST' },
+      );
+      setResultado(anterior => anterior ? { ...anterior, ...dados } : anterior);
+    } catch (erro) {
+      Aviso.alert('Marcações', erro instanceof Error ? erro.message : 'Não foi possível gerar as imagens.');
+    } finally { setGerandoMarcacoes(false); }
   };
 
   const salvarRevisao = async () => {
@@ -714,7 +502,7 @@ export default function NovaAvaliacaoScreen() {
 
           </View>
 
-          <FotografiasAvaliacao imagens={resultado} onAtualizar={atualizarFotografias} />
+          <FotografiasAvaliacao imagens={resultado} onAtualizar={atualizarFotografias} onGerar={gerarMarcacoes} gerando={gerandoMarcacoes} />
 
           {resultado.comparacao_multimodal?.componentes ? (
             <View style={styles.card}>
@@ -723,7 +511,7 @@ export default function NovaAvaliacaoScreen() {
                 <View key={letra} style={styles.bloco}>
                   <Text style={styles.rotulo}>{letra} — {componente.nome || ''}</Text>
                   <Text style={styles.texto}>Comparação descritiva: {componente.situacao_descritiva || 'Inconclusiva'}</Text>
-                  <Text style={styles.textoMenor}>Possibilidade de avaliação: {componente.divergencia_status ? 'As análises apresentam diferenças' : 'Sem diferenças identificadas'}</Text>
+                  <Text style={styles.textoMenor}>Diferença no estado de avaliação: {componente.divergencia_status ? 'Sim' : 'Não'}</Text>
                   <Text style={styles.textoMenor}>{componente.observacao_descritiva || ''}</Text>
                 </View>
               ))}
@@ -743,7 +531,7 @@ export default function NovaAvaliacaoScreen() {
 
               {item.sucesso && item.resposta ? (
                 <>
-                  <ResultadoEstruturado resposta={item.resposta} />
+                  <RelatorioCompleto resposta={item.resposta} />
 
                   <TouchableOpacity
                     style={styles.botao}

@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from services.multimodal.validacao_regioes import validar_regioes_propostas
+from services.medidas_geometricas import calcular_estimativas
 
 from schemas.multimodal import (
     AnaliseMultimodalInput,
@@ -1027,10 +1028,12 @@ def normalizar_resposta(
         d.largura
     )
 
+    estimativas = calcular_estimativas(d.comprimento, d.largura)
+    r.medidas.area_retangulo_delimitador_cm2 = estimativas["area_retangulo_delimitador_cm2"]
+    r.medidas.area_elipse_aproximada_cm2 = estimativas["area_elipse_aproximada_cm2"]
     r.medidas.observacoes = [
-        "Comprimento e largura informados "
-        "pelo profissional; área não calculada "
-        "sem método validado."
+        estimativas["observacao"],
+        "Área real segmentada não calculada; não existe escala fotográfica e segmentação clínica validadas.",
     ]
 
     return r

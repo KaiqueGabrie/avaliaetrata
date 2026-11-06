@@ -7,16 +7,16 @@ import {
 import { apiJson } from '../../config/cliente';
 import { Aviso } from '../../utils/avisos';
 import FotografiasAvaliacao, { ImagensAvaliacao } from '../../components/fotografias-avaliacao';
+import RelatorioCompleto from '../../components/relatorio-completo';
+import type { RespostaEstruturadaIA } from '../../types/ia';
 
 type Relatorio = {
   id_relatorio: string;
   provedor: string;
   status: string;
-  conteudo_editavel: {
-    conteudo_descricao?: string;
-    avaliacao_times?: { componente: string; nome: string; status: string; observacoes_visuais?: string[] }[];
-    medidas?: { comprimento_informado_cm?: string | null; largura_informada_cm?: string | null; area_calculada_cm2?: number | null };
-  };
+  conteudo_editavel: RespostaEstruturadaIA;
+  conteudo_original?: RespostaEstruturadaIA;
+  alertas_validacao?: { codigo?: string; mensagem?: string; severidade?: string }[];
   revisao_profissional_necessaria: boolean;
   data_aprovacao: string | null;
 };
@@ -41,20 +41,27 @@ export default function DetalheAvaliacaoScreen() {
   const [descricao, setDescricao] = useState('');
   const [carregando, setCarregando] = useState(true);
   const [salvando, setSalvando] = useState(false);
+  const [gerandoMarcacoes, setGerandoMarcacoes] = useState(false);
+  const [verOriginal, setVerOriginal] = useState(false);
   const [erro, setErro] = useState('');
 
   const carregar = useCallback(async () => {
     if (!id || !/^\d+$/.test(id)) { setErro('Avaliação inválida.'); setCarregando(false); return; }
     setCarregando(true); setErro('');
     try {
-      const [r, c, fotos] = await Promise.all([
+      const [r, c, fotos, marcacoes] = await Promise.all([
         apiJson<{ relatorios: Relatorio[] }>(`/analises/${id}/relatorios`),
         apiJson<{ comparacoes: { id_comparacao: string }[] }>(`/analises/${id}/comparacoes`),
         pacienteId
           ? apiJson<ImagensAvaliacao>(`/pacientes/${pacienteId}/analises/${id}/imagens`).catch(() => null)
           : Promise.resolve(null),
+        pacienteId
+          ? apiJson<{ marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'] }>(
+              `/pacientes/${pacienteId}/analises/${id}/marcacoes`,
+            ).catch(() => null)
+          : Promise.resolve(null),
       ]);
-      setImagens(fotos);
+      setImagens(fotos ? { ...fotos, ...(marcacoes || {}) } : null);
       setRelatorios(r.relatorios || []);
       if (c.comparacoes?.length) {
         const detalhes = await apiJson<Comparacao>(`/analises/${id}/comparacoes/${c.comparacoes[0].id_comparacao}`);
@@ -68,15 +75,35 @@ export default function DetalheAvaliacaoScreen() {
   const atualizarFotografias = async () => {
     if (!pacienteId || !id) return;
     try {
-      const fotos = await apiJson<ImagensAvaliacao>(`/pacientes/${pacienteId}/analises/${id}/imagens`);
-      setImagens(fotos);
+      const [fotos, marcacoes] = await Promise.all([
+        apiJson<ImagensAvaliacao>(`/pacientes/${pacienteId}/analises/${id}/imagens`),
+        apiJson<{ marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'] }>(
+          `/pacientes/${pacienteId}/analises/${id}/marcacoes`,
+        ).catch(() => null),
+      ]);
+      setImagens({ ...fotos, ...(marcacoes || {}) });
     } catch (e) {
       Aviso.alert('Fotografias', e instanceof Error ? e.message : 'Não foi possível atualizar as imagens.');
     }
   };
 
+  const gerarMarcacoes = async () => {
+    if (!pacienteId || !id) return;
+    setGerandoMarcacoes(true);
+    try {
+      const dados = await apiJson<{ marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'] }>(
+        `/pacientes/${pacienteId}/analises/${id}/marcacoes/gerar`,
+        { method: 'POST' },
+      );
+      setImagens(anterior => anterior ? { ...anterior, ...dados } : anterior);
+    } catch (erro) {
+      Aviso.alert('Marcações', erro instanceof Error ? erro.message : 'Não foi possível gerar as imagens.');
+    } finally { setGerandoMarcacoes(false); }
+  };
+
   const selecionar = (r: Relatorio) => {
     setSelecionado(r.provedor);
+    setVerOriginal(false);
     setDescricao(r.conteudo_editavel?.conteudo_descricao || '');
   };
   const relatorioAtual = relatorios.find((r) => r.provedor === selecionado);
@@ -116,13 +143,13 @@ export default function DetalheAvaliacaoScreen() {
       {pacienteId ? <Text style={styles.menor}>Prontuário nº {pacienteId}</Text> : null}
       {carregando ? <ActivityIndicator color="#0056b3" size="large" /> : null}
       {erro ? <Text style={styles.erro}>{erro}</Text> : null}
-      {imagens ? <FotografiasAvaliacao imagens={imagens} onAtualizar={atualizarFotografias} /> : null}
+      {imagens ? <FotografiasAvaliacao imagens={imagens} onAtualizar={atualizarFotografias} onGerar={gerarMarcacoes} gerando={gerandoMarcacoes} /> : null}
       <Text style={styles.secao}>Relatórios das IAs</Text>
       {!carregando && !relatorios.length ? <Text style={styles.menor}>Nenhum relatório salvo nesta avaliação.</Text> : null}
       {relatorios.map((r) => (
         <TouchableOpacity key={r.provedor} style={[styles.card, selecionado === r.provedor && styles.ativo]} onPress={() => selecionar(r)}>
           <Text style={styles.subtitulo}>{r.provedor.toUpperCase()}</Text>
-          <Text style={styles.menor}>{r.status === 'aprovado' ? 'Aprovado' : r.status === 'revisado' ? 'Revisado' : 'Aguardando revisão profissional'}</Text>
+          <Text style={styles.menor}>{r.status === 'aprovado' ? 'Aprovado' : r.status === 'em_edicao' ? 'Em edição' : 'Aguardando revisão profissional'}</Text>
           <Text style={styles.menor}>Toque para visualizar e revisar</Text>
         </TouchableOpacity>
       ))}
@@ -137,24 +164,20 @@ export default function DetalheAvaliacaoScreen() {
             onChangeText={setDescricao}
             editable={relatorioAtual.status !== 'aprovado' && !salvando}
           />
-          <Text style={styles.subtitulo}>Avaliação T.I.M.E.S.</Text>
-          {(relatorioAtual.conteudo_editavel?.avaliacao_times || []).map((t, i) => (
-            <View key={`${t.componente}-${i}`} style={styles.item}>
-              <Text style={styles.subtitulo}>{t.componente} — {t.nome}</Text>
-              <Text style={styles.menor}>Estado: {t.status}</Text>
-              {(t.observacoes_visuais || []).map((obs, j) => (
-                <Text key={j} style={styles.menor}>• {obs}</Text>
-              ))}
-            </View>
-          ))}
-          {relatorioAtual.conteudo_editavel?.medidas ? (
-            <View style={styles.item}>
-              <Text style={styles.subtitulo}>Medidas informadas</Text>
-              <Text style={styles.menor}>Comprimento: {relatorioAtual.conteudo_editavel.medidas.comprimento_informado_cm || '—'} cm</Text>
-              <Text style={styles.menor}>Largura: {relatorioAtual.conteudo_editavel.medidas.largura_informada_cm || '—'} cm</Text>
-              <Text style={styles.menor}>Área calculada: {relatorioAtual.conteudo_editavel.medidas.area_calculada_cm2 ?? 'Não calculada'} cm²</Text>
-            </View>
-          ) : null}
+          <Text style={styles.menor}>O relatório completo permanece disponível abaixo em seções expansíveis, sem exclusão de informações.</Text>
+          <RelatorioCompleto resposta={relatorioAtual.conteudo_editavel} mostrarDescricao={false} />
+          {relatorioAtual.alertas_validacao?.length ? <View style={styles.item}>
+            <Text style={styles.subtitulo}>Alertas de validação técnica</Text>
+            {relatorioAtual.alertas_validacao.map((a, i) => <Text key={i} style={styles.menor}>
+              • {a.codigo || 'Alerta'} ({a.severidade || 'revisão'}): {a.mensagem || 'Sem descrição'}
+            </Text>)}
+          </View> : null}
+          {relatorioAtual.conteudo_original ? <>
+            <TouchableOpacity style={styles.item} onPress={() => setVerOriginal(!verOriginal)} accessibilityRole="button">
+              <Text style={styles.subtitulo}>{verOriginal ? '▾ Ocultar' : '▸ Consultar'} relatório original da IA (sem edições)</Text>
+            </TouchableOpacity>
+            {verOriginal ? <RelatorioCompleto resposta={relatorioAtual.conteudo_original} /> : null}
+          </> : null}
           {relatorioAtual.status === 'aprovado' ? (
             <Text style={styles.aprovado}>Relatório aprovado. Edição bloqueada.</Text>
           ) : (
@@ -178,7 +201,7 @@ export default function DetalheAvaliacaoScreen() {
             <View key={letra} style={styles.item}>
               <Text style={styles.subtitulo}>{letra} — {item.nome || ''}</Text>
               <Text style={styles.menor}>Situação descritiva: {item.situacao_descritiva || 'Inconclusiva'}</Text>
-              <Text style={styles.menor}>Possibilidade de avaliação: {item.divergencia_status ? 'As análises apresentam diferenças' : 'Sem diferenças identificadas'}</Text>
+              <Text style={styles.menor}>Diferença no estado de avaliação: {item.divergencia_status ? 'Sim' : 'Não'}</Text>
               <Text style={styles.menor}>{item.observacao_descritiva || ''}</Text>
             </View>
           ))}

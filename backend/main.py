@@ -1,4 +1,4 @@
-"""API Avalia & Trata - backend/main.py (versao 2.4.1)."""
+"""API Avalia & Trata - backend/main.py (versao 2.5.0)."""
 
 import os
 import logging
@@ -22,12 +22,14 @@ from routers.pacientes import router as pacientes_router
 from routers.analises import router as analises_router
 from routers.relatorios_persistentes import router as relatorios_persistentes_router
 from routers.comparacoes import router as comparacoes_router, salvar_comparacao
+from routers.marcacoes import router as marcacoes_router
 from schemas.multimodal import (
     AnaliseMultimodalInput,
     AnaliseTecnicaOpenCVInput,
     DadosClinicosInput,
 )
 from services.image_processing import ImageProcessingService
+from services.medidas_geometricas import calcular_estimativas
 from services.storage import PREFIXO_STORAGE, baixar_original
 from services.multimodal.orchestrator import MultimodalOrchestrator
 from services.multimodal.comparador import comparar_resultados
@@ -48,7 +50,7 @@ app = FastAPI(
         "Sistema de apoio a documentacao e analise descritiva de feridas. "
         "Resultados automatizados exigem validacao profissional."
     ),
-    version="2.4.1",
+    version="2.5.0",
 )
 
 # Cada router e registrado uma unica vez.
@@ -57,6 +59,7 @@ app.include_router(pacientes_router)
 app.include_router(analises_router)
 app.include_router(relatorios_persistentes_router)
 app.include_router(comparacoes_router)
+app.include_router(marcacoes_router)
 
 # Origens permitidas para o frontend.
 origens_locais = [
@@ -310,13 +313,15 @@ def read_root():
     return {
         "status": "online",
         "message": "API Avalia & Trata operacional.",
-        "versao": "2.4.1",
+        "versao": "2.5.0",
         "modulos": {
             "autenticacao": True,
             "pacientes": True,
             "anamnese": True,
             "analises": True,
             "opencv": True,
+            "marcacoes_ia": True,
+            "estimativas_geometricas": True,
             "multimodal": True,
             "comparador": True,
             "relatorios_mysql": True,
@@ -487,6 +492,7 @@ def executar_analise_multimodal(
         "provedores_solicitados": provedores_desejados,
         "analise_multimodal": resultado.model_dump(mode="json"),
         "comparacao_multimodal": comparacao,
+        "medidas_geometricas": calcular_estimativas(dados_clinicos.comprimento, dados_clinicos.largura),
         "persistencia_mysql": persistencia,
         "persistencia_comparacao": persistencia_comparacao,
         "relatorios_disponiveis": list(conjunto.relatorios.keys()),

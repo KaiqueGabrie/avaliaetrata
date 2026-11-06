@@ -38,6 +38,7 @@ from schemas.analise import (
 )
 
 from services.image_processing import ImageProcessingService
+from services.medidas_geometricas import calcular_estimativas
 from services.visualizacao_bordas import VisualizacaoBordasService
 from services.storage import (
     storage_ativo, criar_chave, enviar_arquivo,
@@ -435,6 +436,10 @@ def consultar_imagens_analise(
         "imagem_original_url": _assinar_imagem_privada(imagem.caminho_imagem_original, "originais"),
         "imagem_processada_url": _assinar_imagem_privada(imagem.caminho_imagem_marcada, "processadas"),
         "imagem_bordas_url": _assinar_imagem_privada(caminho_bordas, "bordas"),
+        "medidas_geometricas": calcular_estimativas(
+            (analise.contexto_clinico_json or {}).get("comprimento"),
+            (analise.contexto_clinico_json or {}).get("largura"),
+        ),
         "aviso": "Realce de bordas e apenas visualizacao tecnica, nao delimitacao clinica da ferida.",
     }
 
@@ -635,6 +640,9 @@ async def enviar_imagem_analise(
             "imagem_original_url": url_original,
             "imagem_processada_url": url_processada,
             "imagem_bordas_url": url_bordas,
+            "medidas_geometricas": calcular_estimativas(
+                contexto_atual.get("comprimento"), contexto_atual.get("largura"),
+            ),
             "analise_tecnica": resultado_opencv.get("analise_tecnica"),
             "processamento_aplicado": resultado_opencv.get("processamento_aplicado"),
             "aviso": "Resultados automatizados exigem revisao profissional.",
