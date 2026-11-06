@@ -42,7 +42,7 @@ def bucket():
 
 def criar_chave(tipo: str, enfermeiro_id: int, paciente_id: int,
                 analise_id: int, extensao: str) -> str:
-    if tipo not in ("originais", "processadas"):
+    if tipo not in ("originais", "processadas", "bordas"):
         raise ValueError("Tipo de imagem invalido.")
     extensao = extensao.lower()
     if extensao not in (".jpg", ".jpeg", ".png", ".webp"):

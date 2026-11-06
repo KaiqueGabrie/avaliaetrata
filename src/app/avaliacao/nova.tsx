@@ -20,6 +20,7 @@ import { fetch as expoFetch } from 'expo/fetch';
 
 import { API_URL } from '../../config/api';
 import { Aviso } from '../../utils/avisos';
+import FotografiasAvaliacao, { ImagensAvaliacao } from '../../components/fotografias-avaliacao';
 import {
   RespostaEstruturadaIA,
   ResultadoProvedorIA,
@@ -40,7 +41,9 @@ type RespostaAPI = {
     }>;
     observacao_metodologica?: string;
   };
-  imagem_processada_url?: string;
+  imagem_original_url?: string | null;
+  imagem_processada_url?: string | null;
+  imagem_bordas_url?: string | null;
   analise_tecnica?: {
     brilho_medio?: number;
     contraste_global?: number;
@@ -475,6 +478,17 @@ export default function NovaAvaliacaoScreen() {
       if (!respostaFoto.ok) throw new Error(await mensagemErro(respostaFoto as Response));
       const dadosFoto = await respostaFoto.json();
 
+      // A fotografia ja foi salva. Mantem o acesso a ela mesmo se uma IA falhar.
+      setResultado({
+        sucesso: false,
+        mensagem: 'Fotografia registrada; aguardando as análises das IAs.',
+        analise_id: analiseId,
+        imagem_original_url: dadosFoto.imagem_original_url ?? null,
+        imagem_processada_url: dadosFoto.imagem_processada_url ?? null,
+        imagem_bordas_url: dadosFoto.imagem_bordas_url ?? null,
+        analise_tecnica: dadosFoto.analise_tecnica,
+      });
+
       // 3. Executa os provedores selecionados, usando a imagem já salva.
       setStatusApi('3/3 — Analisando a fotografia. Isso pode levar alguns minutos...');
       const formulario = new FormData();
@@ -498,8 +512,14 @@ export default function NovaAvaliacaoScreen() {
         : await expoFetch(urlAnalise, opcoesAnalise);
       if (!resposta.ok) throw new Error(await mensagemErro(resposta as Response));
       const dados = await resposta.json() as RespostaAPI;
-      setResultado({ ...dados, analise_id: analiseId, imagem_processada_url: dados.imagem_processada_url,
-        analise_tecnica: dadosFoto.analise_tecnica });
+      setResultado({
+        ...dados,
+        analise_id: analiseId,
+        imagem_original_url: dadosFoto.imagem_original_url ?? null,
+        imagem_processada_url: dadosFoto.imagem_processada_url ?? null,
+        imagem_bordas_url: dadosFoto.imagem_bordas_url ?? null,
+        analise_tecnica: dadosFoto.analise_tecnica,
+      });
       const lista = Object.values(dados.analise_multimodal?.resultados || {});
       const sucessos = lista.filter((item) => item.sucesso).length;
       setStatusApi(sucessos > 0
@@ -511,6 +531,18 @@ export default function NovaAvaliacaoScreen() {
         : 'Erro ao criar avaliação.');
       Aviso.alert('Não foi possível concluir', 'Confira sua conexão e os dados informados. Se o problema continuar, tente novamente mais tarde.');
     } finally { setCarregando(false); }
+  };
+
+  const atualizarFotografias = async () => {
+    if (!resultado?.analise_id || !pacienteId) return;
+    try {
+      const imagens = await apiJson<ImagensAvaliacao>(
+        `/pacientes/${pacienteId}/analises/${resultado.analise_id}/imagens`
+      );
+      setResultado((anterior) => anterior ? { ...anterior, ...imagens } : anterior);
+    } catch (e) {
+      Aviso.alert('Fotografias', e instanceof Error ? e.message : 'Não foi possível atualizar as imagens.');
+    }
   };
 
   const salvarRevisao = async () => {
@@ -682,20 +714,7 @@ export default function NovaAvaliacaoScreen() {
 
           </View>
 
-          {resultado.imagem_processada_url ? (
-            <View style={styles.card}>
-              <Text style={styles.subtitulo}>Fotografia analisada</Text>
-              <Image
-                source={{
-                  uri: /^https?:\/\//i.test(resultado.imagem_processada_url)
-                    ? resultado.imagem_processada_url
-                    : `${API_URL}${resultado.imagem_processada_url.startsWith('/') ? '' : '/'}${resultado.imagem_processada_url}`,
-                }}
-                style={styles.imagem}
-                resizeMode="contain"
-              />
-            </View>
-          ) : null}
+          <FotografiasAvaliacao imagens={resultado} onAtualizar={atualizarFotografias} />
 
           {resultado.comparacao_multimodal?.componentes ? (
             <View style={styles.card}>

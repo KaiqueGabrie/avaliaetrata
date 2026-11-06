@@ -10,6 +10,7 @@ from fastapi import (
     File,
     HTTPException,
     UploadFile,
+    Response,
     status,
 )
 
@@ -37,9 +38,10 @@ from schemas.analise import (
 )
 
 from services.image_processing import ImageProcessingService
+from services.visualizacao_bordas import VisualizacaoBordasService
 from services.storage import (
     storage_ativo, criar_chave, enviar_arquivo,
-    remover_remotos, url_assinada,
+    remover_remotos, url_assinada, PREFIXO_STORAGE,
 )
 
 
@@ -392,6 +394,52 @@ def consultar_analise(
 
 
 # ============================================================
+# CONSULTAR FOTOGRAFIAS PRIVADAS DA AVALIACAO
+# ============================================================
+
+def _assinar_imagem_privada(caminho: str | None, pasta: str) -> str | None:
+    """Assina apenas objetos privados do tipo esperado; nao publica caminhos locais."""
+    if not caminho or not caminho.startswith(PREFIXO_STORAGE):
+        return None
+    chave = caminho[len(PREFIXO_STORAGE):]
+    if not chave.startswith(f"{pasta}/") or ".." in Path(chave).parts:
+        logger.warning("Caminho de imagem inconsistente no registro.")
+        return None
+    return url_assinada(chave)
+
+
+@router.get("/{analise_id}/imagens")
+def consultar_imagens_analise(
+    paciente_id: int,
+    analise_id: int,
+    response: Response,
+    db: Session = Depends(get_db),
+    enfermeiro: Enfermeiro = Depends(obter_enfermeiro_atual),
+):
+    # Valida a titularidade antes de gerar qualquer URL assinada.
+    analise = obter_analise_autorizada(paciente_id, analise_id, enfermeiro, db)
+    imagem = db.scalar(
+        select(Imagem).where(
+            Imagem.id_analise_fk == analise_id,
+            Imagem.deleted_at.is_(None),
+        )
+    )
+    if imagem is None:
+        raise HTTPException(status_code=404, detail="Avaliacao sem fotografia.")
+
+    processamento = (analise.contexto_clinico_json or {}).get("processamento_opencv") or {}
+    caminho_bordas = processamento.get("imagem_bordas") if isinstance(processamento, dict) else None
+    response.headers["Cache-Control"] = "private, no-store"
+    return {
+        "id_analise": analise_id,
+        "imagem_original_url": _assinar_imagem_privada(imagem.caminho_imagem_original, "originais"),
+        "imagem_processada_url": _assinar_imagem_privada(imagem.caminho_imagem_marcada, "processadas"),
+        "imagem_bordas_url": _assinar_imagem_privada(caminho_bordas, "bordas"),
+        "aviso": "Realce de bordas e apenas visualizacao tecnica, nao delimitacao clinica da ferida.",
+    }
+
+
+# ============================================================
 # ATUALIZAR DADOS CLÍNICOS DA ANÁLISE
 # ============================================================
 
@@ -467,6 +515,7 @@ async def enviar_imagem_analise(
 ):
     caminho_original = None
     caminho_processado = None
+    caminho_bordas = None
     chaves_remotas = []
     commit_concluido = False
     usar_storage = False
@@ -504,6 +553,11 @@ async def enviar_imagem_analise(
         if not caminho_processado.is_file():
             raise ValueError("Imagem processada nao encontrada.")
 
+        # Gera uma visualizacao adicional, sem modificar a imagem enviada as IAs.
+        caminho_bordas = VisualizacaoBordasService.gerar(
+            str(caminho_processado), str(PROCESSED_DIR)
+        )
+
         usar_storage = storage_ativo()
         if usar_storage:
             chave_original = criar_chave(
@@ -518,10 +572,17 @@ async def enviar_imagem_analise(
             chaves_remotas.append(chave_original)
             caminho_processado_db = enviar_arquivo(caminho_processado, chave_processada)
             chaves_remotas.append(chave_processada)
+            chave_bordas = criar_chave(
+                "bordas", enfermeiro.id_enfermeiro,
+                paciente_id, analise_id, ".png",
+            )
+            caminho_bordas_db = enviar_arquivo(caminho_bordas, chave_bordas)
+            chaves_remotas.append(chave_bordas)
         else:
             # Mantem compatibilidade com o MySQL e os arquivos locais.
             caminho_original_db = f"uploads/{caminho_original.name}"
             caminho_processado_db = f"processed/{caminho_processado.name}"
+            caminho_bordas_db = f"processed/{caminho_bordas.name}"
 
         imagem = Imagem(
             id_analise_fk=analise_id,
@@ -536,6 +597,8 @@ async def enviar_imagem_analise(
             "dimensoes_processadas": resultado_opencv.get("dimensoes_processadas"),
             "analise_tecnica": resultado_opencv.get("analise_tecnica"),
             "processamento_aplicado": resultado_opencv.get("processamento_aplicado"),
+            "imagem_bordas": caminho_bordas_db,
+            "tipo_marcacao": "bordas_tecnicas_sem_segmentacao_clinica",
         }
         analise.contexto_clinico_json = contexto_atual
         # O processamento nao equivale a diagnostico nem mede area fisica validada.
@@ -553,9 +616,11 @@ async def enviar_imagem_analise(
         if usar_storage:
             url_original = url_assinada(chave_original)
             url_processada = url_assinada(chave_processada)
+            url_bordas = url_assinada(chave_bordas)
         else:
             url_original = f"/uploads/{caminho_original.name}"
             url_processada = f"/processed/{caminho_processado.name}"
+            url_bordas = f"/processed/{caminho_bordas.name}"
 
         return {
             "sucesso": True,
@@ -569,6 +634,7 @@ async def enviar_imagem_analise(
             "status_analise": analise.status,
             "imagem_original_url": url_original,
             "imagem_processada_url": url_processada,
+            "imagem_bordas_url": url_bordas,
             "analise_tecnica": resultado_opencv.get("analise_tecnica"),
             "processamento_aplicado": resultado_opencv.get("processamento_aplicado"),
             "aviso": "Resultados automatizados exigem revisao profissional.",
@@ -589,7 +655,8 @@ async def enviar_imagem_analise(
         ) from erro
     finally:
         # No Render, os arquivos locais nao devem ser usados como persistencia.
-        if usar_storage:
+        if usar_storage or os.getenv("STORAGE_REQUIRED", "false").lower() == "true":
             remover_arquivo(caminho_original)
             remover_arquivo(caminho_processado)
+            remover_arquivo(caminho_bordas)
         await file.close()

@@ -6,6 +6,7 @@ import {
 } from 'react-native';
 import { apiJson } from '../../config/cliente';
 import { Aviso } from '../../utils/avisos';
+import FotografiasAvaliacao, { ImagensAvaliacao } from '../../components/fotografias-avaliacao';
 
 type Relatorio = {
   id_relatorio: string;
@@ -34,6 +35,7 @@ type Comparacao = {
 export default function DetalheAvaliacaoScreen() {
   const { id, pacienteId } = useLocalSearchParams<{ id: string; pacienteId?: string }>();
   const [relatorios, setRelatorios] = useState<Relatorio[]>([]);
+  const [imagens, setImagens] = useState<ImagensAvaliacao | null>(null);
   const [comparacoes, setComparacoes] = useState<Comparacao[]>([]);
   const [selecionado, setSelecionado] = useState('');
   const [descricao, setDescricao] = useState('');
@@ -45,10 +47,14 @@ export default function DetalheAvaliacaoScreen() {
     if (!id || !/^\d+$/.test(id)) { setErro('Avaliação inválida.'); setCarregando(false); return; }
     setCarregando(true); setErro('');
     try {
-      const [r, c] = await Promise.all([
+      const [r, c, fotos] = await Promise.all([
         apiJson<{ relatorios: Relatorio[] }>(`/analises/${id}/relatorios`),
         apiJson<{ comparacoes: { id_comparacao: string }[] }>(`/analises/${id}/comparacoes`),
+        pacienteId
+          ? apiJson<ImagensAvaliacao>(`/pacientes/${pacienteId}/analises/${id}/imagens`).catch(() => null)
+          : Promise.resolve(null),
       ]);
+      setImagens(fotos);
       setRelatorios(r.relatorios || []);
       if (c.comparacoes?.length) {
         const detalhes = await apiJson<Comparacao>(`/analises/${id}/comparacoes/${c.comparacoes[0].id_comparacao}`);
@@ -56,8 +62,18 @@ export default function DetalheAvaliacaoScreen() {
       } else setComparacoes([]);
     } catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao carregar relatórios.'); }
     finally { setCarregando(false); }
-  }, [id]);
+  }, [id, pacienteId]);
   useFocusEffect(useCallback(() => { void carregar(); }, [carregar]));
+
+  const atualizarFotografias = async () => {
+    if (!pacienteId || !id) return;
+    try {
+      const fotos = await apiJson<ImagensAvaliacao>(`/pacientes/${pacienteId}/analises/${id}/imagens`);
+      setImagens(fotos);
+    } catch (e) {
+      Aviso.alert('Fotografias', e instanceof Error ? e.message : 'Não foi possível atualizar as imagens.');
+    }
+  };
 
   const selecionar = (r: Relatorio) => {
     setSelecionado(r.provedor);
@@ -100,6 +116,7 @@ export default function DetalheAvaliacaoScreen() {
       {pacienteId ? <Text style={styles.menor}>Prontuário nº {pacienteId}</Text> : null}
       {carregando ? <ActivityIndicator color="#0056b3" size="large" /> : null}
       {erro ? <Text style={styles.erro}>{erro}</Text> : null}
+      {imagens ? <FotografiasAvaliacao imagens={imagens} onAtualizar={atualizarFotografias} /> : null}
       <Text style={styles.secao}>Relatórios das IAs</Text>
       {!carregando && !relatorios.length ? <Text style={styles.menor}>Nenhum relatório salvo nesta avaliação.</Text> : null}
       {relatorios.map((r) => (
