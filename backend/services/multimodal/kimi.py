@@ -231,7 +231,13 @@ class KimiProvider(BaseModelProvider):
                                     "Não prescreva tratamentos. "
                                     "Responda exclusivamente "
                                     "com um objeto JSON válido, "
-                                    "sem Markdown."
+                                    "sem Markdown. "
+                                    "No objeto times, inclua sempre "
+                                    "T, I, M, E e S, mesmo se "
+                                    "algum componente não for "
+                                    "avaliável; nesse caso use "
+                                    "status nao_avaliavel e "
+                                    "observacoes vazias."
                                 ),
                             },
                             {
@@ -337,6 +343,13 @@ class KimiProvider(BaseModelProvider):
                 dados,
                 input_data,
             )
+
+            if resposta.status_resposta == "sucesso_parcial":
+                logger.warning(
+                    "Kimi: resposta parcial; componentes "
+                    "ausentes registrados como nao avaliaveis. "
+                    "Revisao profissional necessaria."
+                )
 
             logger.info(
                 "Kimi: análise concluída "

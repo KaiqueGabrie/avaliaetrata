@@ -315,6 +315,11 @@ F. AVALIAÇÃO T.I.M.E.S.
 Preencha obrigatoriamente os cinco componentes:
 T, I, M, E e S.
 
+Nunca omita uma dessas cinco chaves do objeto "times".
+Se nao houver informacoes para uma delas, retorne-a com
+"status": "nao_avaliavel" e listas vazias de observacoes,
+sem inventar achados para preencher o campo.
+
 Cada componente deve ter:
 
 "status"
@@ -670,19 +675,57 @@ def normalizar_resposta(
         if not isinstance(times.get(letra), dict)
     ]
 
-    if faltantes:
+    # Se o modelo nao produziu nenhum componente, a resposta nao tem
+    # estrutura clinica minima para ser apresentada como uma analise.
+    # Uma resposta com 3 ou 4 componentes, por outro lado, pode ser
+    # preservada com os campos ausentes explicitamente NAO avaliados.
+    if len(faltantes) > 2:
         raise ValueError(
-            "Componentes T.I.M.E.S. ausentes: "
-            + ", ".join(faltantes)
+            "JSON sem componentes T.I.M.E.S. validos "
+            "em quantidade suficiente para analise."
         )
 
+    if faltantes:
+        logger.warning(
+            "Resposta multimodal parcial: componentes "
+            "T.I.M.E.S. ausentes ou invalidos: %s",
+            ", ".join(faltantes),
+        )
+        times = dict(times)  # Nao modificar o JSON original recebido.
+        for letra in faltantes:
+            nome = NOMES[letra]
+            times[letra] = {
+                "status": "nao_avaliavel",
+                "observacoes": [],
+                "pendencias": [
+                    f"Revisar presencialmente o componente "
+                    f"{letra} — {nome}; a IA nao retornou "
+                    "dados estruturados para ele."
+                ],
+                "limitacoes": [
+                    "Campo ausente ou invalido na resposta "
+                    "da IA; nenhuma observacao foi inferida."
+                ],
+            }
+
     r = RespostaEstruturadaModelo()
+
+    if faltantes:
+        r.status_resposta = "sucesso_parcial"
 
     r.conteudo_descricao = descricao.strip()
 
     r.limitacoes_declaradas = _lista_textos(
         dados.get("limitacoes")
     )
+    if faltantes:
+        r.limitacoes_declaradas.append(
+            "Resposta automatizada incompleta: "
+            "componentes T.I.M.E.S. nao retornados: "
+            + ", ".join(faltantes)
+            + ". Esses componentes foram marcados "
+            "como nao avaliaveis, sem inferencia clinica."
+        )
 
     r.qualidade_imagem.status = _status(
         dados.get("qualidade"),
@@ -824,7 +867,12 @@ def normalizar_resposta(
     # Não inventar observações para resolver
     # contradições do modelo.
 
-    avisos = []
+    avisos = [
+        "Resposta parcial da IA: componente "
+        f"{letra} — {NOMES[letra]} nao retornado. "
+        "Revisar presencialmente; nenhuma observacao foi criada."
+        for letra in faltantes
+    ]
 
     correspondencias = {
         "bordas": "E",

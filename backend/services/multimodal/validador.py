@@ -329,6 +329,15 @@ def _verificar_marcacoes(resposta, relatorio):
 def validar_resposta(resposta: RespostaEstruturadaModelo) -> RelatorioValidacao:
     """Valida sem modificar a resposta original."""
     relatorio = RelatorioValidacao()
+    if resposta.status_resposta == "sucesso_parcial":
+        _adicionar_alerta(
+            relatorio,
+            "RESPOSTA_TIMES_PARCIAL",
+            "aviso",
+            "A IA nao retornou todos os componentes T.I.M.E.S.; "
+            "os campos ausentes foram marcados como nao avaliaveis. "
+            "Revisao profissional obrigatoria.",
+        )
     _verificar_componentes(resposta, relatorio)
     _verificar_caracteristicas(resposta, relatorio)
     _verificar_propriedades_nao_visuais(resposta, relatorio)
