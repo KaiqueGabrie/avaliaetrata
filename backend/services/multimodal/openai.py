@@ -18,7 +18,7 @@ class OpenAIProvider(BaseModelProvider):
             mime=mimetypes.guess_type(caminho)[0] or 'image/png'
             with open(caminho,'rb') as f: b64=base64.b64encode(f.read()).decode()
             with OpenAI(api_key=chave,timeout=45,max_retries=0) as cli:
-                result=cli.chat.completions.create(model=os.getenv('OPENAI_MODEL','gpt-4o-mini'),response_format={'type':'json_object'},max_tokens=1800,temperature=0.2,messages=[{'role':'system','content':'Responda somente JSON válido. Apoio documental, sem diagnóstico.'},{'role':'user','content':[{'type':'text','text':construir_prompt(input_data)},{'type':'image_url','image_url':{'url':f'data:{mime};base64,{b64}'}}]}])
+                result=cli.chat.completions.create(model=os.getenv('OPENAI_MODEL','gpt-4o-mini'),response_format={'type':'json_object'},max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "3200")),temperature=0.2,messages=[{'role':'system','content':'Responda somente JSON válido. Apoio documental, sem diagnóstico.'},{'role':'user','content':[{'type':'text','text':construir_prompt(input_data)},{'type':'image_url','image_url':{'url':f'data:{mime};base64,{b64}'}}]}])
             if result.choices[0].finish_reason=='length':return saida(erro='OpenAI: saída truncada; aumente OPENAI_MAX_TOKENS')
             texto=result.choices[0].message.content
             return saida(True,normalizar_resposta(json.loads(texto),input_data))

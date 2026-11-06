@@ -3,6 +3,8 @@ import json
 import logging
 from typing import Any
 
+from services.multimodal.validacao_regioes import validar_regioes_propostas
+
 from schemas.multimodal import (
     AnaliseMultimodalInput,
     RespostaEstruturadaModelo,
@@ -112,6 +114,7 @@ def construir_prompt(
             for letra in NOMES
         },
         "aparencias_tecidos": [],
+        "regioes_propostas": [],
         "pontos_revisao": [],
     }
 
@@ -166,8 +169,9 @@ sensibilidade, perfusão, odor, dor ou exames.
 A7. Não presuma ausência de infecção por não haver
 sinais evidentes na imagem.
 
-A8. Não invente medidas, percentuais teciduais,
-áreas físicas, coordenadas ou polígonos.
+A8. Não invente medidas, percentuais teciduais, áreas físicas
+ou coordenadas. Só proponha polígonos se puder localizar
+visualmente cada vértice; caso contrário, use lista vazia.
 
 A9. Não atribua comorbidades, histórico clínico
 ou causas que não tenham sido fornecidos.
@@ -523,6 +527,48 @@ Quando não houver descrição confiável,
 retorne uma lista vazia.
 
 ==================================================
+H2. REGIÕES VISUAIS PROPOSTAS PARA MARCAÇÃO
+==================================================
+
+Preencha "regioes_propostas" SOMENTE se for possível
+localizar com clareza os limites VISUAIS na fotografia.
+Uma lista vazia é a resposta correta quando houver dúvida.
+
+Cada objeto deve conter EXATAMENTE:
+- "tipo_regiao": uma das categorias abaixo;
+- "descricao": descrição visual curta, sem diagnóstico;
+- "confianca": "baixa", "moderada" ou "alta";
+- "pontos": lista de 3 a 12 objetos {{"x": 0.0, "y": 0.0}}.
+
+Categorias permitidas para "tipo_regiao":
+- "contorno_visual_lesao": limite visual aparente da lesão;
+- "superficie_escura": área visivelmente escura;
+- "superficie_amarelada": área visivelmente amarelada;
+- "superficie_avermelhada": área visivelmente avermelhada;
+- "pele_perilesional": pele visível imediatamente ao redor.
+
+NÃO use nomes de tecido (necrose, esfacelo, granulação)
+como categorias: cor não confirma histologia nem viabilidade.
+
+SISTEMA DE COORDENADAS:
+- Use a IMAGEM PROCESSADA recebida, não a original.
+- Coordenadas normalizadas entre 0 e 1, sem pixels absolutos.
+- (0,0) é o canto superior esquerdo; (1,1) o inferior direito.
+- x cresce para a direita e y cresce para baixo.
+- Os pontos devem seguir a borda em ordem e formar um
+  polígono simples, sem cruzamentos, não um retângulo genérico.
+- Não inclua chão, lençol ou outros objetos no contorno.
+- Não marque toda a imagem como região de interesse.
+- Máximo 6 regiões; uma categoria pode repetir em áreas separadas.
+- Se não conseguir posicionar os vértices, retorne [].
+- Confiança é apenas avaliação subjetiva do modelo.
+- O enfermeiro precisará confirmar/corrigir TODAS as regiões.
+- Não calcule área em cm² nem percentuais a partir dos polígonos.
+
+Dimensões da imagem processada (somente para referência):
+{json.dumps(entrada.dimensoes_processadas, ensure_ascii=False)}
+
+==================================================
 I. PONTOS PARA REVISÃO PROFISSIONAL
 ==================================================
 
@@ -858,15 +904,18 @@ def normalizar_resposta(
         "segmentação validada.",
     ]
 
-    # MARCAÇÕES
-    # Esta etapa deverá ser implementada por
-    # módulo de segmentação separado e validado.
-
-    r.marcacoes_imagem.limitacoes = [
-        "Não foram gerados polígonos nesta etapa. "
-        "Marcações exigem segmentação e "
-        "conferência profissional."
-    ]
+    # MARCAÇÕES: coordenadas apenas PROPOSTAS e validadas geometricamente.
+    # Nao desenhar/salvar como imagem aprovada nesta etapa.
+    regioes, limitacoes_regioes = validar_regioes_propostas(
+        dados.get("regioes_propostas", [])
+    )
+    r.marcacoes_imagem.regioes = regioes
+    r.marcacoes_imagem.limitacoes = limitacoes_regioes
+    if not regioes:
+        r.marcacoes_imagem.limitacoes.append(
+            "Nenhuma região com geometria suficiente foi proposta; "
+            "a fotografia permanece sem marcações clínicas."
+        )
 
     # PONTOS PARA REVISÃO PROFISSIONAL
 

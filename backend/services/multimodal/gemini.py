@@ -138,6 +138,28 @@ class GeminiProvider(BaseModelProvider):
             ],
         }
 
+        regiao_visual = {
+            "type": "OBJECT",
+            "properties": {
+                "tipo_regiao": {"type": "STRING", "enum": [
+                    "contorno_visual_lesao", "superficie_escura",
+                    "superficie_amarelada", "superficie_avermelhada",
+                    "pele_perilesional",
+                ]},
+                "descricao": {"type": "STRING"},
+                "confianca": {"type": "STRING", "enum": ["baixa", "moderada", "alta"]},
+                "pontos": {"type": "ARRAY", "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "x": {"type": "NUMBER"},
+                        "y": {"type": "NUMBER"},
+                    },
+                    "required": ["x", "y"],
+                }},
+            },
+            "required": ["tipo_regiao", "descricao", "confianca", "pontos"],
+        }
+
         return {
             "type": "OBJECT",
             "properties": {
@@ -155,6 +177,7 @@ class GeminiProvider(BaseModelProvider):
                     "type": "ARRAY",
                     "items": aparencia_tecido,
                 },
+                "regioes_propostas": {"type": "ARRAY", "items": regiao_visual},
                 "pontos_revisao": lista_textos,
             },
             "required": [
@@ -164,6 +187,7 @@ class GeminiProvider(BaseModelProvider):
                 "caracteristicas",
                 "times",
                 "aparencias_tecidos",
+                "regioes_propostas",
                 "pontos_revisao",
             ],
         }
@@ -279,6 +303,7 @@ limitacoes
 caracteristicas
 times
 aparencias_tecidos
+regioes_propostas
 pontos_revisao
 
 O objeto "times" deve conter:
