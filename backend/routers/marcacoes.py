@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from database import get_db
 from models import Enfermeiro, Imagem, RelatorioIA
@@ -275,10 +276,17 @@ def _persistir_revisao(
         contexto['revisao_marcacoes_profissional'] = registro
         contexto['historico_revisoes_marcacoes'] = historico
         analise.contexto_clinico_json = contexto
+        flag_modified(analise, "contexto_clinico_json")
         _auditar_revisao(db, enfermeiro.id_enfermeiro, analise_id,
                          'aprovar_marcacoes' if aprovado else 'editar_marcacoes', versao)
         db.commit()
-        return registro
+        # Confere a persistência real após o commit, não apenas a resposta em memória.
+        db.refresh(analise)
+        confirmado = _registro_revisao(analise)
+        if not confirmado or int(confirmado.get('versao', -1)) != versao:
+            logger.error('Revisão %s não confirmada no banco após commit da análise %s.', versao, analise_id)
+            raise HTTPException(status_code=500, detail='A revisão não pôde ser confirmada no banco. Atualize e consulte o histórico.')
+        return confirmado
     except ValueError as erro:
         db.rollback()
         if nova_chave:
@@ -404,6 +412,7 @@ def retificar_editor_marcacoes(
     contexto['historico_revisoes_marcacoes'] = historico
     contexto['revisao_marcacoes_profissional'] = novo
     analise.contexto_clinico_json = contexto
+    flag_modified(analise, 'contexto_clinico_json')
     _auditar_revisao(db, enfermeiro.id_enfermeiro, analise_id, 'retificar_marcacoes', novo['versao'])
     try:
         db.commit()

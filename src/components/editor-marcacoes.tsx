@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
 import {
   ActivityIndicator, Image, ScrollView, StyleSheet, Text, TouchableOpacity,
   useWindowDimensions, View,
@@ -123,7 +124,8 @@ export default function EditorMarcacoes({ pacienteId, analiseId }: {
     finally { setCarregando(false); }
   }, [caminho]);
 
-  useEffect(() => { if (aberto) void carregar(); }, [aberto, carregar]);
+  // Recupera a revisão persistida ao entrar/voltar ao relatório, mesmo com o editor fechado.
+  useFocusEffect(useCallback(() => { void carregar(); }, [carregar]));
   const largura = Math.max(200, Math.min(560, larguraJanela - 65, 620 * tamanho.largura / tamanho.altura));
   const altura = largura * tamanho.altura / tamanho.largura;
 
@@ -217,9 +219,16 @@ export default function EditorMarcacoes({ pacienteId, analiseId }: {
       const resposta = await enviar<{ revisao: Revisao }>(caminho, 'PUT', {
         provedor_base: provedor, revisao_esperada: versao, regioes,
       });
-      setVersao(resposta.revisao.versao); setStatus('rascunho'); setAlterado(false);
-      setDados(prev => prev ? { ...prev, revisao: resposta.revisao } : prev);
-      Aviso.alert('Rascunho salvo', 'Imagem e regiões armazenadas. A classificação ainda não foi aprovada.');
+      // Não declarar sucesso até confirmar que o GET recupera a versão salva.
+      const confirmado = await apiJson<DadosEditor>(caminho);
+      if (confirmado.revisao?.versao !== resposta.revisao.versao ||
+          confirmado.revisao.regioes.length !== regioes.length) {
+        throw new Error('O servidor respondeu ao salvamento, mas não confirmou a revisão ao consultar novamente. Verifique os logs do Render.');
+      }
+      setDados(confirmado);
+      setRegioes(confirmado.revisao.regioes);
+      setVersao(confirmado.revisao.versao); setStatus(confirmado.revisao.status); setAlterado(false);
+      Aviso.alert('Rascunho salvo', `Revisão ${confirmado.revisao.versao} confirmada no banco. Abra novamente o relatório para conferir.`);
     } catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao salvar.'); }
     finally { setSalvando(false); }
   };
@@ -237,9 +246,13 @@ export default function EditorMarcacoes({ pacienteId, analiseId }: {
         setSalvando(true); setErro('');
         try {
           const resposta = await enviar<{ revisao: Revisao }>(`${caminho}/aprovar`, 'POST', { revisao_esperada: versao });
-          setVersao(resposta.revisao.versao); setStatus('aprovado');
-          setDados(prev => prev ? { ...prev, revisao: resposta.revisao } : prev);
-          Aviso.alert('Imagem aprovada', 'A imagem marcada foi armazenada separadamente da fotografia original.');
+          const confirmado = await apiJson<DadosEditor>(caminho);
+          if (confirmado.revisao?.versao !== resposta.revisao.versao || confirmado.revisao.status !== 'aprovado') {
+            throw new Error('A aprovação não pôde ser confirmada ao consultar novamente o servidor.');
+          }
+          setVersao(confirmado.revisao.versao); setStatus('aprovado');
+          setDados(confirmado);
+          Aviso.alert('Imagem aprovada', 'A versão aprovada foi confirmada no banco e armazenada separadamente da fotografia original.');
         } catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao aprovar.'); }
         finally { setSalvando(false); }
       } },
@@ -266,7 +279,19 @@ export default function EditorMarcacoes({ pacienteId, analiseId }: {
     <TouchableOpacity onPress={() => setAberto(v => !v)} accessibilityRole="button">
       <Text style={styles.titulo}>{aberto ? '▾ Ocultar editor de marcações' : '▸ Editar imagem e validar tecidos (enfermeiro)'}</Text>
     </TouchableOpacity>
-    {!aberto ? <Text style={styles.legenda}>Corrigir contornos, atribuir classes e salvar uma imagem revisada sem alterar a fotografia original.</Text> : null}
+    {!aberto ? <View>
+      <Text style={styles.legenda}>Corrigir contornos, atribuir classes e salvar uma imagem revisada sem alterar a fotografia original.</Text>
+      {carregando ? <ActivityIndicator size="small" color="#0056b3" /> : null}
+      {erro ? <Text style={styles.erro}>{erro}</Text> : null}
+      {rev ? <View style={styles.estatisticas}>
+        <Text style={styles.subtitulo}>Imagem revisada pelo profissional — {rev.status === 'aprovado' ? 'APROVADA' : 'RASCUNHO'}</Text>
+        <Text style={styles.legenda}>Versão {rev.versao} • {rev.regioes.length} região(ões) • Fonte: {rev.provedor_base}.</Text>
+        {rev.imagem_url ? <Image source={{ uri: rev.imagem_url }} style={{ width: '100%', height: 280 }} resizeMode="contain" />
+          : <Text style={styles.erro}>A revisão está registrada, mas a imagem não está disponível. Abra o editor e atualize o acesso.</Text>}
+        <Text style={styles.legenda}>Esta é a imagem corrigida pelo enfermeiro. As imagens acima continuam mostrando as propostas originais das IAs.</Text>
+        <Botao texto="Atualizar imagem revisada" onPress={() => void carregar()} desabilitado={carregando} />
+      </View> : !carregando && !erro ? <Text style={styles.legenda}>Ainda não existe revisão profissional salva nesta avaliação.</Text> : null}
+    </View> : null}
     {aberto ? <View>
       {carregando ? <ActivityIndicator size="large" color="#0056b3" /> : null}
       {erro ? <Text style={styles.erro}>{erro}</Text> : null}
