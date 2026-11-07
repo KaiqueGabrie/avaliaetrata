@@ -114,7 +114,7 @@ export default function FotografiasAvaliacao({ imagens, onAtualizar, onGerar, ge
     {onGerar ? <TouchableOpacity style={styles.botao} onPress={onGerar} disabled={gerando} accessibilityRole="button">
       <Text style={styles.botaoTexto}>{gerando ? 'Gerando visualizações...' : 'Gerar / atualizar marcações das IAs'}</Text>
     </TouchableOpacity> : null}
-    <Text style={styles.legenda}>Nenhuma marcação é aprovada automaticamente. A revisão geométrica manual será implementada na próxima etapa.</Text>
+    <Text style={styles.legenda}>Nenhuma marcação é aprovada automaticamente. Para corrigir os contornos e atribuir classes de tecidos após avaliação profissional, abra o editor de marcações abaixo.</Text>
     <AreaGeometrica dados={imagens.medidas_geometricas} />
     {imagens.imagem_bordas_url ? <>
       <TouchableOpacity onPress={() => setMostrarBordas(!mostrarBordas)} accessibilityRole="button">

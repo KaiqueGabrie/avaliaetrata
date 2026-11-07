@@ -8,6 +8,7 @@ import { apiJson } from '../../config/cliente';
 import { Aviso } from '../../utils/avisos';
 import FotografiasAvaliacao, { ImagensAvaliacao } from '../../components/fotografias-avaliacao';
 import RelatorioCompleto from '../../components/relatorio-completo';
+import EditorMarcacoes from '../../components/editor-marcacoes';
 import type { RespostaEstruturadaIA } from '../../types/ia';
 
 type Relatorio = {
@@ -144,6 +145,7 @@ export default function DetalheAvaliacaoScreen() {
       {carregando ? <ActivityIndicator color="#0056b3" size="large" /> : null}
       {erro ? <Text style={styles.erro}>{erro}</Text> : null}
       {imagens ? <FotografiasAvaliacao imagens={imagens} onAtualizar={atualizarFotografias} onGerar={gerarMarcacoes} gerando={gerandoMarcacoes} /> : null}
+      {pacienteId && id ? <EditorMarcacoes pacienteId={pacienteId} analiseId={id} /> : null}
       <Text style={styles.secao}>Relatórios das IAs</Text>
       {!carregando && !relatorios.length ? <Text style={styles.menor}>Nenhum relatório salvo nesta avaliação.</Text> : null}
       {relatorios.map((r) => (

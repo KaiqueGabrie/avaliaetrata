@@ -22,6 +22,7 @@ import { API_URL } from '../../config/api';
 import { Aviso } from '../../utils/avisos';
 import FotografiasAvaliacao, { ImagensAvaliacao } from '../../components/fotografias-avaliacao';
 import RelatorioCompleto from '../../components/relatorio-completo';
+import EditorMarcacoes from '../../components/editor-marcacoes';
 import { ResultadoProvedorIA } from '../../types/ia';
 
 type Provedor = 'gemini' | 'openai' | 'kimi' | 'todos';
@@ -503,6 +504,7 @@ export default function NovaAvaliacaoScreen() {
           </View>
 
           <FotografiasAvaliacao imagens={resultado} onAtualizar={atualizarFotografias} onGerar={gerarMarcacoes} gerando={gerandoMarcacoes} />
+          {pacienteId && resultado.analise_id ? <EditorMarcacoes pacienteId={pacienteId} analiseId={resultado.analise_id} /> : null}
 
           {resultado.comparacao_multimodal?.componentes ? (
             <View style={styles.card}>
