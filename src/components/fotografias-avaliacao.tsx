@@ -6,6 +6,13 @@ export type MarcacaoIA = {
   status: 'pronta' | 'pendente' | 'sem_regioes' | 'indisponivel';
   url?: string | null;
   total_regioes: number;
+  total_hipoteses_tecido?: number;
+  detalhes_regioes?: {
+    rotulo_visual: string;
+    classificacao_proposta: string;
+    justificativa: string;
+    confianca_autodeclarada?: string | null;
+  }[];
   mensagem?: string;
 };
 export type MedidasGeometricas = {
@@ -78,6 +85,7 @@ export default function FotografiasAvaliacao({ imagens, onAtualizar, onGerar, ge
   const [comparar, setComparar] = useState(false);
   const [mostrarBordas, setMostrarBordas] = useState(false);
   const [mostrarPreprocessada, setMostrarPreprocessada] = useState(false);
+  const [detalhesAbertos, setDetalhesAbertos] = useState<Record<string, boolean>>({});
   const { width } = useWindowDimensions();
   const marcacoes = imagens.marcacoes_por_ia || {};
   const temImagem = !!(imagens.imagem_original_url || imagens.imagem_processada_url || imagens.imagem_bordas_url);
@@ -86,8 +94,20 @@ export default function FotografiasAvaliacao({ imagens, onAtualizar, onGerar, ge
   const mostrar = (provedor: { id: string; nome: string }, compacta = false) => {
     const dados = marcacoes[provedor.id];
     return <View key={provedor.id} style={[styles.marcacao, comparar && (width > 1000 ? styles.marcacaoTerco : styles.marcacaoCheia)]}>
-      {dados?.url ? <Fotografia titulo={`${provedor.nome} — ${dados.total_regioes} região(ões) proposta(s)`}
-        url={dados.url} descricao="Proposta geométrica da IA, não validada pelo profissional. Não representa classificação de tecidos ou área real." compacta={compacta} />
+      {dados?.url ? <>
+        <Fotografia titulo={`${provedor.nome} — ${dados.total_regioes} região(ões) proposta(s)`}
+          url={dados.url} descricao="Contornos e hipóteses visuais de tecido propostos pela IA. NÃO são classificação clínica confirmada, nem área real." compacta={compacta} />
+        <Text style={styles.legenda}>Hipóteses de tecido: {dados.total_hipoteses_tecido || 0}. Sem porcentagens automáticas; confirme no editor.</Text>
+        {dados.detalhes_regioes?.length ? <TouchableOpacity accessibilityRole="button"
+          onPress={() => setDetalhesAbertos(anterior => ({ ...anterior, [provedor.id]: !anterior[provedor.id] }))}>
+          <Text style={styles.link}>{detalhesAbertos[provedor.id] ? '▾ Ocultar' : '▸ Ver'} hipóteses e justificativas ({dados.detalhes_regioes.length})</Text>
+        </TouchableOpacity> : null}
+        {detalhesAbertos[provedor.id] ? (dados.detalhes_regioes || []).map((regiao, i) => <View key={`${provedor.id}_${i}`} style={styles.detalheRegiao}>
+          <Text style={styles.texto}>{i + 1}. {regiao.rotulo_visual} — {regiao.classificacao_proposta === 'nao_classificado' ? 'Não classificado' : `Possível ${regiao.classificacao_proposta}`}</Text>
+          {regiao.justificativa ? <Text style={styles.legenda}>{regiao.justificativa}</Text> : null}
+          {regiao.confianca_autodeclarada ? <Text style={styles.legenda}>Confiança autodeclarada: {regiao.confianca_autodeclarada}</Text> : null}
+        </View>) : null}
+      </>
       : <View style={styles.semMarcacao}>
           <Text style={styles.subtitulo}>{provedor.nome}</Text>
           <Text style={styles.legenda}>{dados?.mensagem || 'Execute as IAs e gere as visualizações para consultar as regiões propostas.'}</Text>
@@ -105,7 +125,7 @@ export default function FotografiasAvaliacao({ imagens, onAtualizar, onGerar, ge
 
     <View style={styles.separador} />
     <Text style={styles.subtitulo}>Marcações propostas por IA</Text>
-    <Text style={styles.legenda}>Cada modelo recebe a mesma fotografia. O OpenCV apenas desenha os polígonos que passaram na validação geométrica.</Text>
+    <Text style={styles.legenda}>Cada modelo recebe a mesma fotografia e pode propor hipóteses independentes de granulação, esfacelo ou necrose. O OpenCV desenha apenas regiões válidas. Cor isolada não determina tecido.</Text>
     <View style={styles.abas}>
       {NOMES.map(p => <Botao key={p.id} texto={p.nome} onPress={() => { setAba(p.id); setComparar(false); }} ativo={!comparar && aba === p.id} />)}
       <Botao texto="Comparar lado a lado" onPress={() => setComparar(!comparar)} ativo={comparar} />
@@ -114,7 +134,7 @@ export default function FotografiasAvaliacao({ imagens, onAtualizar, onGerar, ge
     {onGerar ? <TouchableOpacity style={styles.botao} onPress={onGerar} disabled={gerando} accessibilityRole="button">
       <Text style={styles.botaoTexto}>{gerando ? 'Gerando visualizações...' : 'Gerar / atualizar marcações das IAs'}</Text>
     </TouchableOpacity> : null}
-    <Text style={styles.legenda}>Nenhuma marcação é aprovada automaticamente. Para corrigir os contornos e atribuir classes de tecidos após avaliação profissional, abra o editor de marcações abaixo.</Text>
+    <Text style={styles.legenda}>Nenhuma hipótese é aprovada automaticamente. No editor, o enfermeiro pode aceitar, alterar ou rejeitar as classes propostas, corrigir contornos e validar a imagem. Percentuais dependem da delimitação e revisão profissional.</Text>
     <AreaGeometrica dados={imagens.medidas_geometricas} />
     {imagens.imagem_bordas_url ? <>
       <TouchableOpacity onPress={() => setMostrarBordas(!mostrarBordas)} accessibilityRole="button">
@@ -150,6 +170,7 @@ const styles = StyleSheet.create({
   marcacaoTerco: { width: '32%' },
   marcacaoCheia: { width: '100%' },
   semMarcacao: { minHeight: 130, padding: 12, backgroundColor: '#f8fafc', borderRadius: 8, justifyContent: 'center' },
+  detalheRegiao: { padding: 10, backgroundColor: '#f8fafc', borderRadius: 8, marginBottom: 6 },
   medidas: { backgroundColor: '#f8fafc', padding: 12, borderRadius: 8, marginVertical: 12 },
   botao: { backgroundColor: '#0056b3', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 8 },
   botaoTexto: { color: '#fff', fontWeight: 'bold', fontSize: 13 },

@@ -20,6 +20,10 @@ class RegiaoManual(BaseModel):
     pontos: list[PontoManual] = Field(min_length=3, max_length=60)
     origem: Literal['ia', 'profissional'] = 'profissional'
     descricao: str = Field(default='', max_length=240)
+    # Proveniência da sugestão original, preservada após correção profissional.
+    classe_proposta_ia: Classe | None = None
+    justificativa_classificacao_ia: str = Field(default='', max_length=320)
+    confianca_classificacao_ia: Literal['baixa', 'moderada', 'alta'] | None = None
 
 class SalvarRevisao(BaseModel):
     model_config = ConfigDict(extra='forbid')

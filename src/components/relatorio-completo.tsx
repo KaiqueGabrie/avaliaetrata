@@ -93,7 +93,9 @@ export default function RelatorioCompleto({ resposta, mostrarDescricao = true }:
         <Linha titulo="Confiança declarada" valor={item.confianca_autodeclarada} />
         {item.justificativa ? <Linha titulo="Justificativa" valor={item.justificativa} /> : null}
         <Linha titulo="Revisão necessária" valor={item.revisao_profissional_necessaria ? 'Sim' : 'Não'} />
-      </Bloco>) : <Text style={styles.texto}>Nenhuma classificação visual de tecido disponível.</Text>}
+      </Bloco>) : <Text style={styles.texto}>{marcacoes?.regioes?.some(r => r.classificacao_tecido_proposta && r.classificacao_tecido_proposta !== 'nao_classificado')
+        ? 'Existem hipóteses de tecido propostas pela IA na seção “Regiões propostas na fotografia”. Sem percentuais automáticos.'
+        : 'Nenhuma classificação visual de tecido disponível.'}</Text>}
       <Lista titulo="Limitações" itens={tecidos?.limitacoes} />
     </Secao>
 
@@ -114,6 +116,9 @@ export default function RelatorioCompleto({ resposta, mostrarDescricao = true }:
         <Linha titulo="Região" valor={regiao.rotulo} />
         <Linha titulo="Identificador" valor={regiao.identificador} />
         <Linha titulo="Descrição" valor={regiao.descricao} />
+        <Linha titulo="Hipótese de tecido proposta pela IA" valor={regiao.classificacao_tecido_proposta || 'Não classificado'} />
+        {regiao.justificativa_classificacao ? <Linha titulo="Evidências e limitações da hipótese" valor={regiao.justificativa_classificacao} /> : null}
+        {regiao.confianca_classificacao_autodeclarada ? <Linha titulo="Confiança autodeclarada na hipótese" valor={regiao.confianca_classificacao_autodeclarada} /> : null}
         <Linha titulo="Confiança declarada" valor={regiao.confianca_autodeclarada} />
         <Linha titulo="Revisão necessária" valor={regiao.revisao_profissional_necessaria ? 'Sim' : 'Não'} />
         <Text style={styles.menor}>Coordenadas propostas ({regiao.pontos?.length || 0} pontos): {(regiao.pontos || []).map(p => `(${p.x.toFixed(3)}, ${p.y.toFixed(3)})`).join(' · ') || 'Não informadas'}</Text>

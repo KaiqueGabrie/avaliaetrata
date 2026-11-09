@@ -108,6 +108,11 @@ def gerar_visualizacao(
     if altura * largura > 24_000_000:
         raise ValueError('Imagem grande demais para renderizar marcações.')
     estatisticas = calcular_proporcoes(regioes, largura, altura)
+    estatisticas['status_validacao'] = 'aprovado' if aprovado else 'rascunho_nao_validado'
+    estatisticas['metodo'] += (
+        ' Versão APROVADA pelo profissional.' if aprovado
+        else ' RASCUNHO: proporções exploratórias, não validadas pelo profissional.'
+    )
     base = imagem.copy()
     for regiao in regioes:
         if regiao.classe == 'contorno_lesao':

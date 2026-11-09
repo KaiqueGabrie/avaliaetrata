@@ -1,4 +1,4 @@
-"""Validacao defensiva de poligonos VISUAIS sugeridos por modelos multimodais.
+"""Validação defensiva de polígonos e hipóteses visuais de tecido por IA.
 
 Nao e segmentacao clinica. Coordenadas aceitas sao propostas para revisao
 humana, nao medidas de area nem confirmacao de tipo de tecido.
@@ -9,6 +9,9 @@ import math
 from typing import Any
 
 from schemas.multimodal import RegiaoIdentificada, PontoImagem
+
+CLASSES_TECIDO_PROPOSTAS = {"granulacao", "esfacelo", "necrose", "nao_classificado"}
+TIPOS_SEM_CLASSIFICACAO = {"contorno_visual_lesao", "pele_perilesional"}
 
 ROTULOS_VISUAIS = {
     "contorno_visual_lesao": "Contorno visual aparente da lesão",
@@ -111,12 +114,39 @@ def validar_regioes_propostas(dados: Any) -> tuple[list[RegiaoIdentificada], lis
         descricao = item.get("descricao")
         if not isinstance(descricao, str):
             descricao = ""
+        # A classificação não é deduzida do tipo/cor da região. Exige proposta
+        # explícita, justificativa visual e confiança ao menos moderada.
+        classe = item.get("classificacao_tecido_proposta")
+        justificativa = item.get("justificativa_classificacao")
+        confianca_classe = item.get("confianca_classificacao")
+        if tipo in TIPOS_SEM_CLASSIFICACAO:
+            classe = "nao_classificado"
+            justificativa = "Contorno ou pele perilesional não é classe do leito."
+            confianca_classe = None
+        elif (not isinstance(classe, str) or
+              classe not in CLASSES_TECIDO_PROPOSTAS):
+            classe = "nao_classificado"
+            justificativa = "Nenhuma hipótese de tecido válida foi fornecida."
+            confianca_classe = None
+        elif classe != "nao_classificado":
+            if (not isinstance(justificativa, str) or len(justificativa.strip()) < 20 or
+                    confianca_classe not in ("moderada", "alta")):
+                classe = "nao_classificado"
+                justificativa = "Hipótese de tecido descartada: evidência visual ou confiança insuficiente."
+                confianca_classe = None
+        else:
+            confianca_classe = None
+        if not isinstance(justificativa, str):
+            justificativa = "Sem evidências visuais suficientes para classificação."
         validas.append(RegiaoIdentificada(
             identificador=f"{tipo}-{len(validas) + 1}",
             rotulo=ROTULOS_VISUAIS[tipo],
             descricao=descricao.strip()[:240],
             pontos=[PontoImagem(x=x, y=y) for x, y in pontos],
             confianca_autodeclarada=confianca,
+            classificacao_tecido_proposta=classe,
+            justificativa_classificacao=justificativa.strip()[:320],
+            confianca_classificacao_autodeclarada=confianca_classe,
             revisao_profissional_necessaria=True,
         ))
         assinaturas.add(assinatura)
@@ -127,6 +157,8 @@ def validar_regioes_propostas(dados: Any) -> tuple[list[RegiaoIdentificada], lis
         "Coordenadas propostas por IA, não validadas nem equivalentes a segmentação clínica.",
         "A posição e o contorno devem ser conferidos e corrigidos pelo profissional antes de gerar imagem marcada.",
         "A confiança declarada pelo modelo não representa precisão clínica comprovada.",
+        "Hipóteses de granulação, esfacelo e necrose exigem evidências visuais específicas e confirmação profissional; a cor isolada não basta.",
+        "Não calcular percentuais clínicos de tecido com polígonos propostos por IA.",
     ]
     if descartadas:
         limitacoes.append(f"{descartadas} região(ões) descartada(s) por formato, confiança ou geometria insuficiente.")

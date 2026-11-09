@@ -117,6 +117,12 @@ class RegiaoIdentificada(SchemaBase):
     descricao: str = ""
     pontos: List[PontoImagem] = Field(default_factory=list)
     confianca_autodeclarada: Optional[Literal["baixa", "moderada", "alta"]] = None
+    # Hipótese por IA, nunca confirmação; None = sem proposta/relatório legado.
+    classificacao_tecido_proposta: Optional[Literal[
+        "granulacao", "esfacelo", "necrose", "nao_classificado"
+    ]] = None
+    justificativa_classificacao: str = ""
+    confianca_classificacao_autodeclarada: Optional[Literal["baixa", "moderada", "alta"]] = None
     revisao_profissional_necessaria: bool = True
 
 

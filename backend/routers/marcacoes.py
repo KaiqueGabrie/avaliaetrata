@@ -21,6 +21,7 @@ from services.storage import (
 from services.visualizacao_marcacoes import (
     VisualizacaoMarcacoesService, assinatura_regioes, validar_regioes_persistidas,
 )
+from services.propostas_tecidos import regioes_para_editor, detalhes_propostas, CLASSES_TECIDO
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix='/pacientes/{paciente_id}/analises', tags=['Marcações de IA'])
@@ -75,12 +76,18 @@ def _resumo(analise, relatorios: dict[str, RelatorioIA], caminho_processada: str
             and caminho.startswith(PREFIXO_STORAGE + 'marcacoes/')
         )
         url = url_assinada(caminho[len(PREFIXO_STORAGE):]) if valido else None
+        detalhes = detalhes_propostas(regioes)
         resultado[provedor] = {
             'status': 'pronta' if url else 'pendente',
             'url': url,
             'total_regioes': len(regioes),
+            'total_hipoteses_tecido': sum(
+                r.classificacao_tecido_proposta in CLASSES_TECIDO
+                for r in regioes
+            ),
+            'detalhes_regioes': detalhes,
             'mensagem': (
-                'Proposta visual não validada pelo enfermeiro.' if url
+                'Hipóteses visuais de IA, não confirmadas pelo enfermeiro.' if url
                 else 'Há polígonos propostos; gere a imagem marcada para visualizar.'
             ),
         }
@@ -99,7 +106,7 @@ def consultar_marcacoes(
     return {
         'analise_id': analise_id,
         'marcacoes_por_ia': _resumo(analise, _relatorios(analise_id, db), caminho),
-        'aviso': 'Marcações propostas por IA; não constituem segmentação ou validação clínica.',
+        'aviso': 'Hipóteses visuais de tecido propostas por IA; não constituem classificação clínica confirmada nem percentuais validados.',
     }
 
 
@@ -164,7 +171,7 @@ def gerar_marcacoes(
     return {
         'analise_id': analise_id,
         'marcacoes_por_ia': _resumo(analise, relatorios, caminho),
-        'aviso': 'Contornos automáticos propostos, não revisados nem aprovados pelo profissional.',
+        'aviso': 'Contornos e hipóteses de tecido propostos, não revisados nem aprovados pelo profissional.',
     }
 
 # ============================================================
@@ -210,16 +217,7 @@ def _regioes_propostas(relatorios: dict[str, RelatorioIA]) -> dict:
     for provedor in PROVEDORES:
         relatorio = relatorios.get(provedor)
         itens = validar_regioes_persistidas(relatorio.conteudo_editavel) if relatorio else []
-        resultado[provedor] = [
-            {
-                'id': f'{provedor}_{i}',
-                'classe': 'contorno_lesao' if r.identificador.startswith('contorno_visual_lesao-') else 'nao_classificado',
-                'origem': 'ia',
-                'descricao': f'{r.rotulo}: {r.descricao}'[:240],
-                'pontos': [p.model_dump() for p in r.pontos],
-            }
-            for i, r in enumerate(itens, start=1)
-        ]
+        resultado[provedor] = regioes_para_editor(itens, provedor)
     return resultado
 
 
@@ -320,7 +318,7 @@ def consultar_editor_marcacoes(
         'imagem_processada_url': url,
         'regioes_propostas_ia': _regioes_propostas(_relatorios(analise_id, db)),
         'revisao': _resposta_revisao(registro),
-        'aviso': 'As classificações dos tecidos são decisões do profissional, não diagnósticos automáticos.',
+        'aviso': 'As IAs podem propor hipóteses de tecido; a revisão e aprovação são decisões do enfermeiro. Relatórios antigos não são reclassificados automaticamente.',
     }
 
 

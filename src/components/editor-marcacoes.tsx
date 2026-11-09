@@ -11,7 +11,12 @@ import { Aviso } from '../utils/avisos';
 type Classe = 'contorno_lesao' | 'granulacao' | 'esfacelo' | 'necrose' | 'pele_perilesional' | 'nao_classificado';
 type Provedor = 'openai' | 'gemini' | 'kimi' | 'manual';
 type Ponto = { x: number; y: number };
-type Regiao = { id: string; classe: Classe; pontos: Ponto[]; origem: 'ia' | 'profissional'; descricao: string };
+type Regiao = {
+  id: string; classe: Classe; pontos: Ponto[]; origem: 'ia' | 'profissional'; descricao: string;
+  classe_proposta_ia?: Classe | null;
+  justificativa_classificacao_ia?: string;
+  confianca_classificacao_ia?: 'baixa' | 'moderada' | 'alta' | null;
+};
 type Estatisticas = {
   disponivel: boolean;
   motivo?: string | null;
@@ -280,7 +285,7 @@ export default function EditorMarcacoes({ pacienteId, analiseId }: {
       <Text style={styles.titulo}>{aberto ? '▾ Ocultar editor de marcações' : '▸ Editar imagem e validar tecidos (enfermeiro)'}</Text>
     </TouchableOpacity>
     {!aberto ? <View>
-      <Text style={styles.legenda}>Corrigir contornos, atribuir classes e salvar uma imagem revisada sem alterar a fotografia original.</Text>
+      <Text style={styles.legenda}>Importe hipóteses de tecido propostas pela IA, corrija os contornos e confirme ou rejeite cada classe. A fotografia original não é alterada.</Text>
       {carregando ? <ActivityIndicator size="small" color="#0056b3" /> : null}
       {erro ? <Text style={styles.erro}>{erro}</Text> : null}
       {rev ? <View style={styles.estatisticas}>
@@ -296,7 +301,7 @@ export default function EditorMarcacoes({ pacienteId, analiseId }: {
       {carregando ? <ActivityIndicator size="large" color="#0056b3" /> : null}
       {erro ? <Text style={styles.erro}>{erro}</Text> : null}
       {dados ? <>
-        <Text style={styles.legenda}>Estado: {status === 'aprovado' ? 'Aprovado pelo profissional' : status === 'rascunho' ? `Rascunho salvo (versão ${versao})` : 'Sem revisão salva'}. Nenhuma classificação é atribuída automaticamente a partir da cor da fotografia.</Text>
+        <Text style={styles.legenda}>Estado: {status === 'aprovado' ? 'Aprovado pelo profissional' : status === 'rascunho' ? `Rascunho salvo (versão ${versao})` : 'Sem revisão salva'}. As classes importadas são hipóteses da IA, não diagnósticos. Confira cada região antes de aprovar.</Text>
         <Text style={styles.subtitulo}>Relatório de referência</Text>
         <View style={styles.linha}>{PROVEDORES.map(p => <Botao key={p.id} texto={p.nome} ativo={provedor === p.id}
           desabilitado={bloqueado} onPress={() => { setProvedor(p.id); setAlterado(true); }} />)}</View>
@@ -338,8 +343,14 @@ export default function EditorMarcacoes({ pacienteId, analiseId }: {
         </View>
         <Text style={styles.legenda}>Linhas são propostas/revisões geométricas. A fotografia original é preservada. Evite sobrepor polígonos de classes diferentes.</Text>
         <Text style={styles.subtitulo}>Regiões ({regioes.length})</Text>
-        <View style={styles.linha}>{regioes.map((r, i) => <Botao key={r.id} texto={`${i + 1}. ${nome(r.classe)}`}
+        <View style={styles.linha}>{regioes.map((r, i) => <Botao key={r.id} texto={`${i + 1}. ${nome(r.classe)}${r.classe_proposta_ia ? ' (IA)' : ''}`}
           ativo={selecionada === i} onPress={() => { setSelecionada(i); setVerticeSelecionado(null); }} />)}</View>
+        {selecionada != null && regioes[selecionada]?.classe_proposta_ia ? <View style={styles.selecionada}>
+          <Text style={styles.subtitulo}>Origem da região {selecionada + 1}: proposta da IA</Text>
+          <Text style={styles.legenda}>Classe proposta originalmente: {nome(regioes[selecionada].classe_proposta_ia!)}. Classe atual: {nome(regioes[selecionada].classe)}.</Text>
+          {regioes[selecionada].justificativa_classificacao_ia ? <Text style={styles.legenda}>Evidências declaradas: {regioes[selecionada].justificativa_classificacao_ia}</Text> : null}
+          <Text style={styles.legenda}>A classificação original permanece registrada mesmo após a correção profissional.</Text>
+        </View> : null}
         {selecionada != null && regioes[selecionada] && !bloqueado ? <View style={styles.selecionada}>
           <Text style={styles.subtitulo}>Alterar classe da região {selecionada + 1}</Text>
           <View style={styles.linha}>{CLASSES.map(c => <Botao key={c.id} texto={c.nome}
@@ -357,7 +368,7 @@ export default function EditorMarcacoes({ pacienteId, analiseId }: {
           }} />
         </View> : null}
         {rev?.estatisticas ? <View style={styles.estatisticas}>
-          <Text style={styles.subtitulo}>Proporções da última versão salva</Text>
+          <Text style={styles.subtitulo}>{rev.status === 'aprovado' ? 'Proporções da imagem aprovada' : 'Proporções exploratórias do rascunho (não validadas)'}</Text>
           {rev.estatisticas.disponivel && rev.estatisticas.percentuais ? Object.entries(rev.estatisticas.percentuais).map(([classe, percentual]) =>
             <Text key={classe} style={styles.legenda}>{nome(classe as Classe)}: {percentual.toLocaleString('pt-BR')}%</Text>)
             : <Text style={styles.legenda}>{rev.estatisticas.motivo || 'Sem contorno delimitado.'}</Text>}

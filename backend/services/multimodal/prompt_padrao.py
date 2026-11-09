@@ -544,7 +544,10 @@ Cada objeto deve conter EXATAMENTE:
 - "tipo_regiao": uma das categorias abaixo;
 - "descricao": descrição visual curta, sem diagnóstico;
 - "confianca": "baixa", "moderada" ou "alta";
-- "pontos": lista de 3 a 12 objetos {{"x": 0.0, "y": 0.0}}.
+- "pontos": lista de 3 a 12 objetos {{"x": 0.0, "y": 0.0}};
+- "classificacao_tecido_proposta": "granulacao", "esfacelo", "necrose" ou "nao_classificado";
+- "justificativa_classificacao": evidências MORFOLÓGICAS visuais, não apenas cor;
+- "confianca_classificacao": "baixa", "moderada" ou "alta".
 
 Categorias permitidas para "tipo_regiao":
 - "contorno_visual_lesao": limite visual aparente da lesão;
@@ -553,8 +556,27 @@ Categorias permitidas para "tipo_regiao":
 - "superficie_avermelhada": área visivelmente avermelhada;
 - "pele_perilesional": pele visível imediatamente ao redor.
 
-NÃO use nomes de tecido (necrose, esfacelo, granulação)
-como categorias: cor não confirma histologia nem viabilidade.
+NÃO use nomes de tecido como "tipo_regiao": ele descreve somente
+aparência. A hipótese de tecido vai no campo separado
+"classificacao_tecido_proposta" e NUNCA é confirmação clínica.
+
+CLASSIFICAÇÃO PROPOSTA DO LEITO (NOVA ETAPA 2G):
+- Para cada superfície, proponha granulação, esfacelo ou necrose
+  APENAS se houver características visuais adicionais à cor,
+  por exemplo textura, aspecto superficial e limites reconhecíveis.
+- Explique as evidências e limitações em "justificativa_classificacao".
+- Se a região estiver encoberta, tiver reflexos, pouca nitidez,
+  ou só a tonalidade for reconhecível, use "nao_classificado".
+- Contorno geral da lesão e pele perilesional: SEMPRE
+  "nao_classificado"; não representam classe do leito.
+- Confiança "baixa" ou justificativa insuficiente: a hipótese
+  será descartada pelo sistema, preservando o polígono visual.
+- Não invente porcentagens ou coordenadas para preencher campos.
+- Não transforme um rótulo visual em tecido automaticamente.
+- Cada provedor responde de forma independente; a confirmação
+  final cabe exclusivamente ao enfermeiro.
+- A análise de tecido não determina infecção, profundidade,
+  tratamento ou viabilidade histológica.
 
 SISTEMA DE COORDENADAS:
 - Use a IMAGEM PROCESSADA recebida, não a original.
@@ -960,6 +982,13 @@ def normalizar_resposta(
     )
     r.marcacoes_imagem.regioes = regioes
     r.marcacoes_imagem.limitacoes = limitacoes_regioes
+    if any(regiao.classificacao_tecido_proposta in ('granulacao', 'esfacelo', 'necrose') for regiao in regioes):
+        # A IA fez uma hipótese estruturada, não uma classificação clínica confirmada.
+        r.avaliacao_tecidos.status = 'parcialmente_avaliavel'
+        r.avaliacao_tecidos.limitacoes.append(
+            'Existem hipóteses de tecidos vinculadas a polígonos na seção de marcações; '
+            'não são percentuais nem classificações confirmadas.'
+        )
     if not regioes:
         r.marcacoes_imagem.limitacoes.append(
             "Nenhuma região com geometria suficiente foi proposta; "

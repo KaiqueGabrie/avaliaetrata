@@ -17,6 +17,9 @@ export interface RegiaoIdentificada {
   descricao: string;
   pontos: PontoImagem[];
   confianca_autodeclarada: Confianca | null;
+  classificacao_tecido_proposta?: 'granulacao' | 'esfacelo' | 'necrose' | 'nao_classificado' | null;
+  justificativa_classificacao?: string;
+  confianca_classificacao_autodeclarada?: Confianca | null;
   revisao_profissional_necessaria: boolean;
 }
 

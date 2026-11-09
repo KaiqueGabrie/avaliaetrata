@@ -1,6 +1,6 @@
-"""Visualização de propostas geométricas de IA sobre a fotografia processada.
+"""Sobreposições de hipóteses visuais de IA na imagem processada.
 
-Não faz classificação clínica, medição de área ou aprovação automática.
+As classes são propostas não confirmadas. Não calcula percentuais de IA.
 """
 from __future__ import annotations
 
@@ -23,6 +23,17 @@ CORES = {
     'superficie_amarelada': (0, 190, 240),
     'superficie_avermelhada': (70, 70, 220),
     'pele_perilesional': (220, 170, 30),
+}
+# Cores BGR: cores da legenda, nunca uma classificação automática por cor.
+CORES_CLASSES = {
+    'granulacao': (55, 55, 220),
+    'esfacelo': (20, 205, 235),
+    'necrose': (120, 100, 85),
+}
+ROTULOS_CLASSES = {
+    'granulacao': 'POSSIVEL GRANULACAO',
+    'esfacelo': 'POSSIVEL ESFACELO',
+    'necrose': 'POSSIVEL NECROSE',
 }
 ROTULOS_CURTOS = {
     'contorno_visual_lesao': 'Contorno aparente',
@@ -61,6 +72,17 @@ def validar_regioes_persistidas(conteudo: Any) -> list[RegiaoIdentificada]:
                 not 0.0003 <= _area(pontos) <= 0.75 or
                 not _simples(pontos)):
             continue
+        # O conteúdo persistido é editável: jamais confiar em um rótulo sem
+        # evidências específicas, nem aceitar classes para contorno/perilesão.
+        classe = regiao.classificacao_tecido_proposta
+        if (tipo in ('contorno_visual_lesao', 'pele_perilesional') or
+                classe not in CORES_CLASSES or
+                len(regiao.justificativa_classificacao.strip()) < 20 or
+                regiao.confianca_classificacao_autodeclarada not in ('moderada', 'alta')):
+            regiao = regiao.model_copy(update={
+                'classificacao_tecido_proposta': 'nao_classificado',
+                'confianca_classificacao_autodeclarada': None,
+            })
         resultado.append(regiao)
         if len(resultado) >= 6:
             break
@@ -69,7 +91,7 @@ def validar_regioes_persistidas(conteudo: Any) -> list[RegiaoIdentificada]:
 
 def assinatura_regioes(regioes: list[RegiaoIdentificada], caminho_referencia: str) -> str:
     dados = {
-        'versao': 1,
+        'versao': 2,
         'imagem': caminho_referencia,
         'regioes': [r.model_dump(mode='json') for r in regioes],
     }
@@ -86,7 +108,7 @@ class VisualizacaoMarcacoesService:
             raise ValueError('Não foi possível ler a fotografia processada.')
         altura, largura = imagem.shape[:2]
         camada = imagem.copy()
-        poligonos: list[tuple[np.ndarray, str]] = []
+        poligonos: list[tuple[np.ndarray, str, str, tuple[int, int, int]]] = []
         for regiao in regioes:
             tipo = regiao.identificador.rsplit('-', 1)[0]
             pontos = np.array([
@@ -94,16 +116,19 @@ class VisualizacaoMarcacoesService:
                  min(altura - 1, max(0, round(p.y * (altura - 1))))]
                 for p in regiao.pontos
             ], dtype=np.int32).reshape((-1, 1, 2))
-            cor = CORES[tipo]
+            classe = regiao.classificacao_tecido_proposta
+            cor = CORES_CLASSES.get(classe, CORES[tipo])
             cv2.fillPoly(camada, [pontos], cor)
-            poligonos.append((pontos, tipo))
+            poligonos.append((pontos, tipo, classe or 'nao_classificado', cor))
         imagem = cv2.addWeighted(camada, 0.18, imagem, 0.82, 0)
-        for indice, (pontos, tipo) in enumerate(poligonos, start=1):
-            cor = CORES[tipo]
+        for indice, (pontos, tipo, classe, cor) in enumerate(poligonos, start=1):
             cv2.polylines(imagem, [pontos], True, cor, thickness=max(2, largura // 420), lineType=cv2.LINE_AA)
             x, y = pontos[:, 0, :].min(axis=0)
-            etiqueta = f'{indice}. {ROTULOS_CURTOS[tipo]}'
-            escala = max(0.38, min(0.72, largura / 950))
+            etiqueta = f'{indice}. {ROTULOS_CLASSES.get(classe, ROTULOS_CURTOS[tipo])}'
+            escala = max(0.32, min(0.64, largura / 1100))
+            # Evita texto extrapolando imagens estreitas.
+            while escala > .20 and cv2.getTextSize(etiqueta, cv2.FONT_HERSHEY_SIMPLEX, escala, 1)[0][0] > largura - 20:
+                escala -= .04
             (tw, th), _ = cv2.getTextSize(etiqueta, cv2.FONT_HERSHEY_SIMPLEX, escala, 1)
             x = max(0, min(int(x), largura - tw - 12))
             y = max(th + 8, min(int(y) - 5, altura - 6))

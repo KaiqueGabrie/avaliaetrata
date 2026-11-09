@@ -148,6 +148,11 @@ class GeminiProvider(BaseModelProvider):
                 ]},
                 "descricao": {"type": "STRING"},
                 "confianca": {"type": "STRING", "enum": ["baixa", "moderada", "alta"]},
+                "classificacao_tecido_proposta": {"type": "STRING", "enum": [
+                    "granulacao", "esfacelo", "necrose", "nao_classificado",
+                ]},
+                "justificativa_classificacao": {"type": "STRING"},
+                "confianca_classificacao": {"type": "STRING", "enum": ["baixa", "moderada", "alta"]},
                 "pontos": {"type": "ARRAY", "items": {
                     "type": "OBJECT",
                     "properties": {
@@ -157,7 +162,11 @@ class GeminiProvider(BaseModelProvider):
                     "required": ["x", "y"],
                 }},
             },
-            "required": ["tipo_regiao", "descricao", "confianca", "pontos"],
+            "required": [
+                "tipo_regiao", "descricao", "confianca", "pontos",
+                "classificacao_tecido_proposta", "justificativa_classificacao",
+                "confianca_classificacao",
+            ],
         }
 
         return {
