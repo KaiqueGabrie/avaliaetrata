@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 from tempfile import TemporaryDirectory
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from database import get_db
-from models import Enfermeiro, Imagem, RelatorioIA
+from models import Enfermeiro, Imagem, RelatorioIA, LogAuditoria
 from routers.auth import obter_enfermeiro_atual
 from routers.analises import obter_analise_autorizada
 from services.storage import (
@@ -22,6 +23,8 @@ from services.visualizacao_marcacoes import (
     VisualizacaoMarcacoesService, assinatura_regioes, validar_regioes_persistidas,
 )
 from services.propostas_tecidos import regioes_para_editor, detalhes_propostas, CLASSES_TECIDO
+from services.multimodal.openai import OpenAIProvider
+from services.multimodal.complemento_regioes import _regioes_efetivas
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix='/pacientes/{paciente_id}/analises', tags=['Marcações de IA'])
@@ -46,6 +49,8 @@ def _imagem_processada(analise_id: int, db: Session) -> str:
     return imagem.caminho_imagem_marcada
 
 
+
+
 def _resumo(analise, relatorios: dict[str, RelatorioIA], caminho_processada: str) -> dict:
     cache = (analise.contexto_clinico_json or {}).get('imagens_marcadas_ia') or {}
     if not isinstance(cache, dict):
@@ -59,11 +64,11 @@ def _resumo(analise, relatorios: dict[str, RelatorioIA], caminho_processada: str
                 'mensagem': 'Relatório desta IA não disponível nesta avaliação.',
             }
             continue
-        regioes = validar_regioes_persistidas(relatorio.conteudo_editavel)
+        regioes, origem = _regioes_efetivas(analise, relatorio, provedor, caminho_processada)
         if not regioes:
             resultado[provedor] = {
                 'status': 'sem_regioes', 'url': None, 'total_regioes': 0,
-                'mensagem': 'A IA não forneceu polígonos com geometria válida para desenhar.',
+                'mensagem': 'A IA não forneceu polígonos com geometria válida. É possível desenhar manualmente.',
             }
             continue
         assinatura = assinatura_regioes(regioes, caminho_processada)
@@ -81,13 +86,15 @@ def _resumo(analise, relatorios: dict[str, RelatorioIA], caminho_processada: str
             'status': 'pronta' if url else 'pendente',
             'url': url,
             'total_regioes': len(regioes),
+            'origem_regioes': origem,
             'total_hipoteses_tecido': sum(
                 r.classificacao_tecido_proposta in CLASSES_TECIDO
                 for r in regioes
             ),
             'detalhes_regioes': detalhes,
             'mensagem': (
-                'Hipóteses visuais de IA, não confirmadas pelo enfermeiro.' if url
+                'Propostas visuais complementares da OpenAI, não validadas.' if url and origem == 'complemento_openai'
+                else 'Hipóteses visuais de IA, não confirmadas pelo enfermeiro.' if url
                 else 'Há polígonos propostos; gere a imagem marcada para visualizar.'
             ),
         }
@@ -137,7 +144,7 @@ def gerar_marcacoes(
                 relatorio = relatorios.get(provedor)
                 if not relatorio:
                     continue
-                regioes = validar_regioes_persistidas(relatorio.conteudo_editavel)
+                regioes, _ = _regioes_efetivas(analise, relatorio, provedor, caminho)
                 if not regioes:
                     continue
                 assinatura = assinatura_regioes(regioes, caminho)
@@ -174,13 +181,85 @@ def gerar_marcacoes(
         'aviso': 'Contornos e hipóteses de tecido propostos, não revisados nem aprovados pelo profissional.',
     }
 
+
+@router.post('/{analise_id}/marcacoes/openai/reprocessar')
+def reprocessar_apenas_regioes_openai(
+    paciente_id: int, analise_id: int, response: Response,
+    db: Session = Depends(get_db),
+    enfermeiro: Enfermeiro = Depends(obter_enfermeiro_atual),
+):
+    """Recupera coordenadas para relatórios existentes sem reexecutar T.I.M.E.S.
+
+    A proposta complementar é separada do relatório original e da revisão
+    profissional. O modelo pode legitimamente retornar zero regiões.
+    """
+    analise = obter_analise_autorizada(paciente_id, analise_id, enfermeiro, db)
+    caminho = _imagem_processada(analise_id, db)
+    relatorios = _relatorios(analise_id, db)
+    relatorio = relatorios.get('openai')
+    if relatorio is None:
+        raise HTTPException(status_code=404, detail='Não existe relatório da OpenAI nesta avaliação.')
+    if validar_regioes_persistidas(relatorio.conteudo_editavel):
+        raise HTTPException(status_code=409, detail='A OpenAI já forneceu regiões válidas nesta avaliação.')
+    contexto = dict(analise.contexto_clinico_json or {})
+    anterior = contexto.get('regioes_openai_complementares')
+    if isinstance(anterior, dict) and anterior.get('imagem_referencia') == caminho:
+        regioes_anteriores, _ = _regioes_efetivas(analise, relatorio, 'openai', caminho)
+        if regioes_anteriores:
+            raise HTTPException(status_code=409, detail='Já existem regiões complementares. Gere a visualização ou abra o editor.')
+        ultima = anterior.get('tentativa_em')
+        if isinstance(ultima, str):
+            try:
+                quando = datetime.fromisoformat(ultima)
+                if quando.tzinfo and datetime.now(timezone.utc) - quando < timedelta(minutes=5):
+                    raise HTTPException(status_code=429, detail='Aguarde cinco minutos antes de tentar novamente.')
+            except ValueError:
+                pass
+    if not storage_ativo() or not caminho.startswith(PREFIXO_STORAGE + 'processadas/'):
+        raise HTTPException(status_code=503, detail='Fotografia processada privada indisponível.')
+    try:
+        with TemporaryDirectory(prefix='avalia_openai_regioes_') as pasta:
+            origem = Path(pasta) / 'processada.png'
+            origem.write_bytes(bucket().download(caminho[len(PREFIXO_STORAGE):]))
+            regioes = OpenAIProvider().propor_regioes_isoladas(str(origem))
+    except Exception as erro:
+        logger.exception('Falha ao solicitar coordenadas complementares da OpenAI para análise %s.', analise_id)
+        raise HTTPException(status_code=502, detail='Não foi possível solicitar coordenadas à OpenAI. Confira o Render e o modelo configurado.') from erro
+
+    contexto['regioes_openai_complementares'] = {
+        'imagem_referencia': caminho,
+        'regioes': [r.model_dump(mode='json') for r in regioes],
+        'tentativa_em': datetime.now(timezone.utc).isoformat(),
+        'status': 'proposta_nao_validada' if regioes else 'sem_regioes',
+    }
+    analise.contexto_clinico_json = contexto
+    flag_modified(analise, 'contexto_clinico_json')
+    db.add(LogAuditoria(
+        id_enfermeiro_fk=enfermeiro.id_enfermeiro,
+        acao='reprocessar_regioes_openai',
+        entidade='analise', registro_id=str(analise_id),
+        detalhes={'quantidade_regioes': len(regioes), 'somente_geometria': True},
+    ))
+    try:
+        db.commit()
+        db.refresh(analise)
+    except Exception as erro:
+        db.rollback()
+        logger.exception('Falha ao salvar regiões complementares da avaliação %s.', analise_id)
+        raise HTTPException(status_code=500, detail='Não foi possível salvar a proposta complementar.') from erro
+    response.headers['Cache-Control'] = 'private, no-store'
+    return {
+        'total_regioes': len(regioes),
+        'mensagem': ('Coordenadas complementares propostas; gere a imagem e revise no editor.'
+                     if regioes else 'A OpenAI não identificou contornos confiáveis. Utilize o desenho manual.'),
+        'marcacoes_por_ia': _resumo(analise, relatorios, caminho),
+    }
+
 # ============================================================
 # Etapa 2F — edição manual e validação das regiões pelo enfermeiro
 # Não modifica a resposta original das IAs ou o relatório T.I.M.E.S.
 # ============================================================
-from datetime import datetime, timezone
 # Endpoints adicionais de revisao profissional
-from models import LogAuditoria
 from schemas.revisao_marcacoes import AprovarRevisao, SalvarRevisao
 from services.segmentacao_profissional import (
     validar_geometrias, gerar_visualizacao,
@@ -212,11 +291,10 @@ def _resposta_revisao(registro: dict | None) -> dict | None:
     }
 
 
-def _regioes_propostas(relatorios: dict[str, RelatorioIA]) -> dict:
+def _regioes_propostas(analise, relatorios: dict[str, RelatorioIA], caminho: str) -> dict:
     resultado = {}
     for provedor in PROVEDORES:
-        relatorio = relatorios.get(provedor)
-        itens = validar_regioes_persistidas(relatorio.conteudo_editavel) if relatorio else []
+        itens, _ = _regioes_efetivas(analise, relatorios.get(provedor), provedor, caminho)
         resultado[provedor] = regioes_para_editor(itens, provedor)
     return resultado
 
@@ -316,7 +394,7 @@ def consultar_editor_marcacoes(
     return {
         'analise_id': analise_id,
         'imagem_processada_url': url,
-        'regioes_propostas_ia': _regioes_propostas(_relatorios(analise_id, db)),
+        'regioes_propostas_ia': _regioes_propostas(analise, _relatorios(analise_id, db), caminho),
         'revisao': _resposta_revisao(registro),
         'aviso': 'As IAs podem propor hipóteses de tecido; a revisão e aprovação são decisões do enfermeiro. Relatórios antigos não são reclassificados automaticamente.',
     }

@@ -43,6 +43,7 @@ export default function DetalheAvaliacaoScreen() {
   const [carregando, setCarregando] = useState(true);
   const [salvando, setSalvando] = useState(false);
   const [gerandoMarcacoes, setGerandoMarcacoes] = useState(false);
+  const [reprocessandoOpenAI, setReprocessandoOpenAI] = useState(false);
   const [verOriginal, setVerOriginal] = useState(false);
   const [erro, setErro] = useState('');
 
@@ -102,6 +103,31 @@ export default function DetalheAvaliacaoScreen() {
     } finally { setGerandoMarcacoes(false); }
   };
 
+  const reprocessarOpenAI = async () => {
+    if (!pacienteId || !id) return;
+    setReprocessandoOpenAI(true);
+    try {
+      const resposta = await apiJson<{ total_regioes: number; mensagem: string }>(
+        `/pacientes/${pacienteId}/analises/${id}/marcacoes/openai/reprocessar`,
+        { method: 'POST' },
+      );
+      if (resposta.total_regioes > 0) {
+        const imagensMarcadas = await apiJson<{ marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'] }>(
+          `/pacientes/${pacienteId}/analises/${id}/marcacoes/gerar`,
+          { method: 'POST' },
+        );
+        setImagens(anterior => anterior ? { ...anterior, ...imagensMarcadas } : anterior);
+        await atualizarFotografias();
+        Aviso.alert('OpenAI — proposta complementar', `${resposta.total_regioes} região(ões) proposta(s). Confira os contornos e reabra o relatório para importá-los no editor. O T.I.M.E.S. original foi preservado.`);
+      } else {
+        await atualizarFotografias();
+        Aviso.alert('Sem coordenadas', resposta.mensagem);
+      }
+    } catch (erro) {
+      Aviso.alert('OpenAI', erro instanceof Error ? erro.message : 'Falha ao tentar obter contornos.');
+    } finally { setReprocessandoOpenAI(false); }
+  };
+
   const selecionar = (r: Relatorio) => {
     setSelecionado(r.provedor);
     setVerOriginal(false);
@@ -144,7 +170,7 @@ export default function DetalheAvaliacaoScreen() {
       {pacienteId ? <Text style={styles.menor}>Prontuário nº {pacienteId}</Text> : null}
       {carregando ? <ActivityIndicator color="#0056b3" size="large" /> : null}
       {erro ? <Text style={styles.erro}>{erro}</Text> : null}
-      {imagens ? <FotografiasAvaliacao imagens={imagens} onAtualizar={atualizarFotografias} onGerar={gerarMarcacoes} gerando={gerandoMarcacoes} /> : null}
+      {imagens ? <FotografiasAvaliacao imagens={imagens} onAtualizar={atualizarFotografias} onGerar={gerarMarcacoes} gerando={gerandoMarcacoes} onReprocessarOpenAI={reprocessarOpenAI} reprocessandoOpenAI={reprocessandoOpenAI} /> : null}
       {pacienteId && id ? <EditorMarcacoes pacienteId={pacienteId} analiseId={id} /> : null}
       <Text style={styles.secao}>Relatórios das IAs</Text>
       {!carregando && !relatorios.length ? <Text style={styles.menor}>Nenhum relatório salvo nesta avaliação.</Text> : null}

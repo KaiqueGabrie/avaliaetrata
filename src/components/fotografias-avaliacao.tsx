@@ -14,6 +14,7 @@ export type MarcacaoIA = {
     confianca_autodeclarada?: string | null;
   }[];
   mensagem?: string;
+  origem_regioes?: 'relatorio' | 'complemento_openai' | 'indisponivel';
 };
 export type MedidasGeometricas = {
   area_retangulo_delimitador_cm2: number | null;
@@ -75,11 +76,13 @@ function AreaGeometrica({ dados }: { dados?: MedidasGeometricas }) {
   </View>;
 }
 
-export default function FotografiasAvaliacao({ imagens, onAtualizar, onGerar, gerando = false }: {
+export default function FotografiasAvaliacao({ imagens, onAtualizar, onGerar, gerando = false, onReprocessarOpenAI, reprocessandoOpenAI = false }: {
   imagens: ImagensAvaliacao;
   onAtualizar?: () => void;
   onGerar?: () => void;
   gerando?: boolean;
+  onReprocessarOpenAI?: () => void;
+  reprocessandoOpenAI?: boolean;
 }) {
   const [aba, setAba] = useState('gemini');
   const [comparar, setComparar] = useState(false);
@@ -98,6 +101,7 @@ export default function FotografiasAvaliacao({ imagens, onAtualizar, onGerar, ge
         <Fotografia titulo={`${provedor.nome} — ${dados.total_regioes} região(ões) proposta(s)`}
           url={dados.url} descricao="Contornos e hipóteses visuais de tecido propostos pela IA. NÃO são classificação clínica confirmada, nem área real." compacta={compacta} />
         <Text style={styles.legenda}>Hipóteses de tecido: {dados.total_hipoteses_tecido || 0}. Sem porcentagens automáticas; confirme no editor.</Text>
+        {dados.origem_regioes === 'complemento_openai' ? <Text style={styles.legenda}>Contornos obtidos em uma análise visual complementar; o relatório T.I.M.E.S. original não foi alterado.</Text> : null}
         {dados.detalhes_regioes?.length ? <TouchableOpacity accessibilityRole="button"
           onPress={() => setDetalhesAbertos(anterior => ({ ...anterior, [provedor.id]: !anterior[provedor.id] }))}>
           <Text style={styles.link}>{detalhesAbertos[provedor.id] ? '▾ Ocultar' : '▸ Ver'} hipóteses e justificativas ({dados.detalhes_regioes.length})</Text>
@@ -111,6 +115,12 @@ export default function FotografiasAvaliacao({ imagens, onAtualizar, onGerar, ge
       : <View style={styles.semMarcacao}>
           <Text style={styles.subtitulo}>{provedor.nome}</Text>
           <Text style={styles.legenda}>{dados?.mensagem || 'Execute as IAs e gere as visualizações para consultar as regiões propostas.'}</Text>
+          {provedor.id === 'openai' && dados?.status === 'sem_regioes' && onReprocessarOpenAI ? (
+            <TouchableOpacity style={styles.botaoContorno} onPress={onReprocessarOpenAI}
+              disabled={reprocessandoOpenAI} accessibilityRole="button">
+              <Text style={styles.botaoContornoTexto}>{reprocessandoOpenAI ? 'Solicitando contornos...' : 'Tentar obter contornos da OpenAI'}</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>}
     </View>;
   };

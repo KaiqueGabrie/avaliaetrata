@@ -115,6 +115,7 @@ export default function NovaAvaliacaoScreen() {
   const [validado, setValidado] = useState(false);
   const [salvandoRevisao, setSalvandoRevisao] = useState(false);
   const [gerandoMarcacoes, setGerandoMarcacoes] = useState(false);
+  const [reprocessandoOpenAI, setReprocessandoOpenAI] = useState(false);
 
   const resultados = resultado?.analise_multimodal?.resultados || {};
 
@@ -334,6 +335,31 @@ export default function NovaAvaliacaoScreen() {
     } finally { setGerandoMarcacoes(false); }
   };
 
+  const reprocessarOpenAI = async () => {
+    if (!resultado?.analise_id || !pacienteId) return;
+    setReprocessandoOpenAI(true);
+    try {
+      const resposta = await apiJson<{ total_regioes: number; mensagem: string }>(
+        `/pacientes/${pacienteId}/analises/${resultado.analise_id}/marcacoes/openai/reprocessar`,
+        { method: 'POST' },
+      );
+      if (resposta.total_regioes > 0) {
+        const imagensMarcadas = await apiJson<{ marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'] }>(
+          `/pacientes/${pacienteId}/analises/${resultado.analise_id}/marcacoes/gerar`,
+          { method: 'POST' },
+        );
+        setResultado(anterior => anterior ? { ...anterior, ...imagensMarcadas } : anterior);
+        await atualizarFotografias();
+        Aviso.alert('OpenAI — proposta complementar', `${resposta.total_regioes} região(ões) proposta(s). Confira as marcações. Reabra a avaliação antes de importar no editor.`);
+      } else {
+        await atualizarFotografias();
+        Aviso.alert('Sem coordenadas', resposta.mensagem);
+      }
+    } catch (erro) {
+      Aviso.alert('OpenAI', erro instanceof Error ? erro.message : 'Falha ao tentar obter contornos.');
+    } finally { setReprocessandoOpenAI(false); }
+  };
+
   const salvarRevisao = async () => {
     if (!resultado?.analise_id || !provedorEscolhido || !revisao.trim()) {
       Aviso.alert('Revisão necessária', 'Selecione uma análise e preencha a descrição revisada.');
@@ -503,7 +529,7 @@ export default function NovaAvaliacaoScreen() {
 
           </View>
 
-          <FotografiasAvaliacao imagens={resultado} onAtualizar={atualizarFotografias} onGerar={gerarMarcacoes} gerando={gerandoMarcacoes} />
+          <FotografiasAvaliacao imagens={resultado} onAtualizar={atualizarFotografias} onGerar={gerarMarcacoes} gerando={gerandoMarcacoes} onReprocessarOpenAI={reprocessarOpenAI} reprocessandoOpenAI={reprocessandoOpenAI} />
           {pacienteId && resultado.analise_id ? <EditorMarcacoes pacienteId={pacienteId} analiseId={resultado.analise_id} /> : null}
 
           {resultado.comparacao_multimodal?.componentes ? (
