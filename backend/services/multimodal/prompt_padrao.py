@@ -6,6 +6,9 @@ from typing import Any
 from services.multimodal.validacao_regioes import validar_regioes_propostas
 from services.multimodal.auditoria_contornos import auditar_contornos
 from services.medidas_geometricas import calcular_estimativas
+from services.multimodal.auditoria_anatomica import (
+    auditar_localizacao,
+)
 
 from schemas.multimodal import (
     AnaliseMultimodalInput,
@@ -1125,6 +1128,24 @@ def normalizar_resposta(
     # destinados à revisão profissional.
     r.pontos_para_revisao_profissional.extend(
         alertas_contornos
+    )
+
+    # Confere contradições anatômicas explícitas na
+    # descrição geral e nas propostas visuais.
+    alertas_anatomicos = auditar_localizacao(
+        entrada.dados_clinicos.localizacao,
+        [
+            r.conteudo_descricao,
+            *[regiao.descricao for regiao in regioes],
+        ],
+    )
+
+    r.marcacoes_imagem.limitacoes.extend(
+        alertas_anatomicos
+    )
+
+    r.pontos_para_revisao_profissional.extend(
+        alertas_anatomicos
     )
 
     if not r.pontos_para_revisao_profissional:

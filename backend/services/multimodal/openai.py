@@ -20,6 +20,8 @@ from schemas.multimodal import AnaliseMultimodalInput, RegiaoIdentificada, Resul
 from services.multimodal.base import BaseModelProvider
 from services.multimodal.prompt_padrao import construir_prompt, normalizar_resposta
 from services.multimodal.validacao_regioes import validar_regioes_propostas
+from services.multimodal.auditoria_contornos import auditar_contornos
+from services.multimodal.auditoria_anatomica import auditar_anatomia_regioes
 
 load_dotenv()
 log = logging.getLogger(__name__)
@@ -160,6 +162,25 @@ class OpenAIProvider(BaseModelProvider):
                         resposta.marcacoes_imagem.limitacoes.append(
                             'Coordenadas obtidas em segunda passagem visual da OpenAI; não validadas.'
                         )
+
+                        # Audita também as regiões da segunda
+                        # passagem, sem modificar o T.I.M.E.S.
+                        # e sem solicitar outra chamada à API.
+                        alertas_complementares = [
+                            *auditar_contornos(regioes),
+                            *auditar_anatomia_regioes(
+                                input_data.dados_clinicos.localizacao,
+                                regioes,
+                            ),
+                        ]
+
+                        resposta.marcacoes_imagem.limitacoes.extend(
+                            alertas_complementares
+                        )
+                        resposta.pontos_para_revisao_profissional.extend(
+                            alertas_complementares
+                        )
+
                         if any(r.classificacao_tecido_proposta in ('granulacao', 'esfacelo', 'necrose') for r in regioes):
                             resposta.avaliacao_tecidos.status = 'parcialmente_avaliavel'
                             resposta.avaliacao_tecidos.limitacoes.append(

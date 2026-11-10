@@ -1,11 +1,9 @@
 
-"""Auditoria de coerência geométrica dos contornos propostos por IA.
+"""Auditoria geométrica de regiões propostas por IA.
 
-Compara regiões de superfície ao contorno visual aparente
-proposto pelo próprio modelo.
-
-Não confirma segmentação correta, diagnóstico ou tecido.
-Não altera nem rejeita os polígonos originais.
+Detecta inconsistências internas entre polígonos.
+Não determina o limite verdadeiro da lesão, não confirma
+tecidos e não modifica as coordenadas propostas.
 """
 
 from __future__ import annotations
@@ -20,8 +18,10 @@ TIPOS_SUPERFICIE = frozenset({
 })
 
 TIPO_CONTORNO = "contorno_visual_lesao"
+TIPO_PERILESIONAL = "pele_perilesional"
 
 LIMIAR_FORA = 0.25
+LIMIAR_AFASTAMENTO = 0.10
 RESOLUCAO_AMOSTRAGEM = 35
 
 
@@ -40,21 +40,13 @@ def _ponto_no_poligono(
     y: float,
     pontos: list[tuple[float, float]],
 ) -> bool:
-    """Teste ponto-polígono pelo método de cruzamentos."""
-
     dentro = False
-    total = len(pontos)
 
-    for indice in range(total):
+    for indice in range(len(pontos)):
         x1, y1 = pontos[indice]
-        x2, y2 = pontos[(indice + 1) % total]
+        x2, y2 = pontos[(indice + 1) % len(pontos)]
 
-        # Inclui pontos sobre a borda.
-        cruzamento = (
-            (y1 > y) != (y2 > y)
-        )
-
-        if cruzamento:
+        if (y1 > y) != (y2 > y):
             intersecao_x = (
                 x1 + (y - y1) * (x2 - x1) / (y2 - y1)
             )
@@ -69,12 +61,6 @@ def _fracao_fora(
     superficie: list[tuple[float, float]],
     contorno: list[tuple[float, float]],
 ) -> float | None:
-    """Estima a fração geométrica da superfície fora do contorno.
-
-    É uma aproximação por amostragem de pontos, não uma
-    mensuração clínica ou percentual de tecido.
-    """
-
     min_x = min(x for x, _ in superficie)
     max_x = max(x for x, _ in superficie)
     min_y = min(y for _, y in superficie)
@@ -86,19 +72,17 @@ def _fracao_fora(
     if largura <= 0 or altura <= 0:
         return None
 
-    total_dentro_superficie = 0
-    total_fora_contorno = 0
+    total = 0
+    fora = 0
 
-    resolucao = RESOLUCAO_AMOSTRAGEM
-
-    for linha in range(resolucao):
+    for linha in range(RESOLUCAO_AMOSTRAGEM):
         y = min_y + (
-            (linha + 0.5) / resolucao
+            (linha + 0.5) / RESOLUCAO_AMOSTRAGEM
         ) * altura
 
-        for coluna in range(resolucao):
+        for coluna in range(RESOLUCAO_AMOSTRAGEM):
             x = min_x + (
-                (coluna + 0.5) / resolucao
+                (coluna + 0.5) / RESOLUCAO_AMOSTRAGEM
             ) * largura
 
             if not _ponto_no_poligono(
@@ -106,35 +90,70 @@ def _fracao_fora(
             ):
                 continue
 
-            total_dentro_superficie += 1
+            total += 1
 
             if not _ponto_no_poligono(
                 x, y, contorno
             ):
-                total_fora_contorno += 1
+                fora += 1
 
-    if total_dentro_superficie == 0:
-        return None
+    return fora / total if total else None
+
+
+def _caixa(
+    pontos: list[tuple[float, float]],
+) -> tuple[float, float, float, float]:
+    return (
+        min(x for x, _ in pontos),
+        min(y for _, y in pontos),
+        max(x for x, _ in pontos),
+        max(y for _, y in pontos),
+    )
+
+
+def _afastamento_caixas(
+    primeira: list[tuple[float, float]],
+    segunda: list[tuple[float, float]],
+) -> float:
+    """Distância mínima entre caixas normalizadas.
+
+    Uma caixa sobreposta ou encostada resulta em zero.
+    Essa medida não é uma distância física em centímetros.
+    """
+    ax1, ay1, ax2, ay2 = _caixa(primeira)
+    bx1, by1, bx2, by2 = _caixa(segunda)
+
+    distancia_x = max(
+        0.0,
+        bx1 - ax2,
+        ax1 - bx2,
+    )
+
+    distancia_y = max(
+        0.0,
+        by1 - ay2,
+        ay1 - by2,
+    )
 
     return (
-        total_fora_contorno /
-        total_dentro_superficie
-    )
+        distancia_x ** 2 + distancia_y ** 2
+    ) ** 0.5
 
 
 def auditar_contornos(
     regioes: list[RegiaoIdentificada],
 ) -> list[str]:
-    """Retorna alertas descritivos sem modificar regiões.
+    """Produz alertas sem modificar nenhuma região.
 
-    O contorno utilizado é uma proposta da própria IA,
-    não uma referência clínica validada.
+    A referência é o contorno aparente da própria IA,
+    e não uma segmentação validada pelo enfermeiro.
     """
 
     contornos = [
         _pontos(regiao)
         for regiao in regioes
         if _tipo(regiao) == TIPO_CONTORNO
+        and len(regiao.pontos) >= 3
     ]
 
     if not contornos:
@@ -143,37 +162,57 @@ def auditar_contornos(
     alertas: list[str] = []
 
     for regiao in regioes:
-        if _tipo(regiao) not in TIPOS_SUPERFICIE:
+        tipo = _tipo(regiao)
+
+        if len(regiao.pontos) < 3:
             continue
 
-        superficie = _pontos(regiao)
+        pontos = _pontos(regiao)
 
-        fracoes = [
-            fracao
-            for contorno in contornos
+        if tipo in TIPOS_SUPERFICIE:
+            fracoes = [
+                fracao
+                for contorno in contornos
+                if (
+                    fracao := _fracao_fora(
+                        pontos,
+                        contorno,
+                    )
+                ) is not None
+            ]
+
             if (
-                fracao := _fracao_fora(
-                    superficie, contorno
+                fracoes
+                and min(fracoes) > LIMIAR_FORA
+            ):
+                alertas.append(
+                    "[AUDITORIA_CONTORNO] "
+                    f"A região '{regiao.identificador}' "
+                    "apresenta parte expressiva de sua "
+                    "área geométrica fora do contorno "
+                    "visual aparente proposto pela mesma IA. "
+                    "Confira o posicionamento e os limites "
+                    "na fotografia antes da validação."
                 )
-            ) is not None
-        ]
 
-        if not fracoes:
-            continue
-
-        # Mais de um contorno: usa a comparação menos
-        # restritiva, evitando sinalização desnecessária.
-        menor_fracao_fora = min(fracoes)
-
-        if menor_fracao_fora > LIMIAR_FORA:
-            alertas.append(
-                "[AUDITORIA_CONTORNO] "
-                f"A região '{regiao.identificador}' "
-                "apresenta parte expressiva de sua área "
-                "geométrica fora do contorno visual "
-                "aparente proposto pela mesma IA. "
-                "Verifique o posicionamento e os limites "
-                "na fotografia antes de validar."
+        elif tipo == TIPO_PERILESIONAL:
+            menor_distancia = min(
+                _afastamento_caixas(
+                    pontos,
+                    contorno,
+                )
+                for contorno in contornos
             )
+
+            if menor_distancia > LIMIAR_AFASTAMENTO:
+                alertas.append(
+                    "[AUDITORIA_CONTORNO] "
+                    f"A região '{regiao.identificador}', "
+                    "identificada como pele perilesional, "
+                    "está geometricamente afastada do "
+                    "contorno principal proposto pela IA. "
+                    "Confirme se realmente corresponde "
+                    "à pele adjacente à lesão."
+                )
 
     return alertas
