@@ -2,8 +2,8 @@
 import { useState } from 'react';
 import {
   ActivityIndicator,
-  Platform,
   Image,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,15 +15,16 @@ import {
 import { File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams } from 'expo-router';
-import { obterToken, mensagemErro, apiJson } from '../../config/cliente';
 import { fetch as expoFetch } from 'expo/fetch';
+import { apiJson, mensagemErro, obterToken } from '../../config/cliente';
 
-import { API_URL } from '../../config/api';
-import { Aviso } from '../../utils/avisos';
+import ComparacaoConfiancaIA from '../../components/comparacao-confianca-ia';
+import EditorMarcacoes from '../../components/editor-marcacoes';
 import FotografiasAvaliacao, { ImagensAvaliacao } from '../../components/fotografias-avaliacao';
 import RelatorioCompleto from '../../components/relatorio-completo';
-import EditorMarcacoes from '../../components/editor-marcacoes';
-import { ResultadoProvedorIA } from '../../types/ia';
+import { API_URL } from '../../config/api';
+import type { ResultadoProvedorIA } from '../../types/ia';
+import { Aviso } from '../../utils/avisos';
 
 type Provedor = 'gemini' | 'openai' | 'kimi' | 'todos';
 
@@ -129,7 +130,10 @@ export default function NovaAvaliacaoScreen() {
   const selecionarImagem = async (camera: boolean) => {
     try {
       if (Platform.OS === 'web' && camera) {
-        Aviso.alert('Câmera', 'No navegador, selecione a fotografia usando a opção da galeria.');
+        Aviso.alert(
+          'Câmera',
+          'No navegador, selecione a fotografia usando a opção da galeria.'
+        );
         return;
       }
 
@@ -171,14 +175,29 @@ export default function NovaAvaliacaoScreen() {
 
   const analisar = async () => {
     if (!pacienteId || !/^\d+$/.test(pacienteId)) {
-      Aviso.alert('Paciente obrigatório', 'Abra a avaliação a partir do prontuário de um paciente.');
+      Aviso.alert(
+        'Paciente obrigatório',
+        'Abra a avaliação a partir do prontuário de um paciente.'
+      );
       return;
     }
+
     if (!localizacao.trim() || !imagemUri) {
-      Aviso.alert('Dados obrigatórios', 'Informe a localização e selecione uma fotografia.');
+      Aviso.alert(
+        'Dados obrigatórios',
+        'Informe a localização e selecione uma fotografia.'
+      );
       return;
     }
-    if (nivelDor.trim() && (!Number.isFinite(Number(nivelDor)) || Number(nivelDor) < 0 || Number(nivelDor) > 10)) {
+
+    if (
+      nivelDor.trim() &&
+      (
+        !Number.isFinite(Number(nivelDor)) ||
+        Number(nivelDor) < 0 ||
+        Number(nivelDor) > 10
+      )
+    ) {
       Aviso.alert('Dor inválida', 'Informe um valor entre 0 e 10.');
       return;
     }
@@ -186,58 +205,101 @@ export default function NovaAvaliacaoScreen() {
     setCarregando(true);
     limpar();
     let analiseId: number | null = null;
+
     try {
       const token = await obterToken();
 
       // 1. Cria uma avaliação pendente associada ao paciente.
       setStatusApi('1/3 — Registrando avaliação...');
+
       const criada = await apiJson<{ id_analise: number }>(
         `/pacientes/${pacienteId}/analises`,
-        { method: 'POST', body: JSON.stringify({
-          queixa_principal: queixaPrincipal.trim() || null,
-          observacoes_clinicas: observacoes.trim() || null,
-          contexto_clinico_json: {
-            localizacao: localizacao.trim(), comprimento: comprimento.trim(),
-            largura: largura.trim(), tipoExsudato: tipoExsudato.trim(),
-            odor, nivelDor: nivelDor.trim(),
-          },
-        }) }
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            queixa_principal: queixaPrincipal.trim() || null,
+            observacoes_clinicas: observacoes.trim() || null,
+            contexto_clinico_json: {
+              localizacao: localizacao.trim(),
+              comprimento: comprimento.trim(),
+              largura: largura.trim(),
+              tipoExsudato: tipoExsudato.trim(),
+              odor,
+              nivelDor: nivelDor.trim(),
+            },
+          }),
+        }
       );
+
       analiseId = criada.id_analise;
 
       // 2. Envia a foto; o backend executa OpenCV e vincula a imagem.
       setStatusApi('2/3 — Registrando fotografia...');
+
       const foto = new FormData();
-      const extensao = imagemAsset?.fileName?.toLowerCase().split('.').pop()
-        || imagemUri.toLowerCase().split('?')[0].split('.').pop();
-      const tipo = imagemAsset?.mimeType
-        || (extensao === 'png' ? 'image/png' : extensao === 'webp' ? 'image/webp' : 'image/jpeg');
+
+      const extensao =
+        imagemAsset?.fileName?.toLowerCase().split('.').pop() ||
+        imagemUri.toLowerCase().split('?')[0].split('.').pop();
+
+      const tipo =
+        imagemAsset?.mimeType ||
+        (
+          extensao === 'png'
+            ? 'image/png'
+            : extensao === 'webp'
+              ? 'image/webp'
+              : 'image/jpeg'
+        );
+
       const nomeArquivo = `lesao.${tipo.split('/')[1] || 'jpeg'}`;
 
       if (Platform.OS === 'web') {
         // O Expo ImagePicker disponibiliza um File real no navegador.
-        // O fallback cobre versões que retornam somente uma URI blob/data.
-        const arquivoWeb = imagemAsset?.file ?? await (await fetch(imagemUri)).blob();
+        // O fallback cobre versões que retornam somente URI blob/data.
+        const arquivoWeb =
+          imagemAsset?.file ??
+          await (await fetch(imagemUri)).blob();
+
         foto.append('file', arquivoWeb, nomeArquivo);
       } else {
         const arquivoNativo = new File(imagemUri);
-        if (!arquivoNativo.exists) throw new Error('Arquivo da fotografia não encontrado.');
-        foto.append('file', arquivoNativo as unknown as Blob, nomeArquivo);
+
+        if (!arquivoNativo.exists) {
+          throw new Error('Arquivo da fotografia não encontrado.');
+        }
+
+        foto.append(
+          'file',
+          arquivoNativo as unknown as Blob,
+          nomeArquivo
+        );
       }
 
-      const urlFoto = `${API_URL}/pacientes/${pacienteId}/analises/${analiseId}/imagem`;
+      const urlFoto =
+        `${API_URL}/pacientes/${pacienteId}/analises/${analiseId}/imagem`;
+
       const opcoesFoto = {
         method: 'POST',
-        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: foto,
       };
-      const respostaFoto = Platform.OS === 'web'
-        ? await fetch(urlFoto, opcoesFoto)
-        : await expoFetch(urlFoto, opcoesFoto);
-      if (!respostaFoto.ok) throw new Error(await mensagemErro(respostaFoto as Response));
+
+      const respostaFoto =
+        Platform.OS === 'web'
+          ? await fetch(urlFoto, opcoesFoto)
+          : await expoFetch(urlFoto, opcoesFoto);
+
+      if (!respostaFoto.ok) {
+        throw new Error(await mensagemErro(respostaFoto as Response));
+      }
+
       const dadosFoto = await respostaFoto.json();
 
-      // A fotografia ja foi salva. Mantem o acesso a ela mesmo se uma IA falhar.
+      // A fotografia permanece salva mesmo se uma IA falhar.
       setResultado({
         sucesso: false,
         mensagem: 'Fotografia registrada; aguardando as análises das IAs.',
@@ -249,8 +311,11 @@ export default function NovaAvaliacaoScreen() {
         analise_tecnica: dadosFoto.analise_tecnica,
       });
 
-      // 3. Executa os provedores selecionados, usando a imagem já salva.
-      setStatusApi('3/3 — Analisando a fotografia. Isso pode levar alguns minutos...');
+      // 3. Executa os provedores selecionados.
+      setStatusApi(
+        '3/3 — Analisando a fotografia. Isso pode levar alguns minutos...'
+      );
+
       const formulario = new FormData();
       formulario.append('localizacao', localizacao.trim());
       formulario.append('comprimento', comprimento.trim());
@@ -261,128 +326,239 @@ export default function NovaAvaliacaoScreen() {
       formulario.append('queixaPrincipal', queixaPrincipal.trim());
       formulario.append('observacoes', observacoes.trim());
       formulario.append('provedor', provedor);
-      const urlAnalise = `${API_URL}/analises/${analiseId}/executar-multimodal`;
+
+      const urlAnalise =
+        `${API_URL}/analises/${analiseId}/executar-multimodal`;
+
       const opcoesAnalise = {
         method: 'POST',
-        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: formulario,
       };
-      const resposta = Platform.OS === 'web'
-        ? await fetch(urlAnalise, opcoesAnalise)
-        : await expoFetch(urlAnalise, opcoesAnalise);
-      if (!resposta.ok) throw new Error(await mensagemErro(resposta as Response));
+
+      const resposta =
+        Platform.OS === 'web'
+          ? await fetch(urlAnalise, opcoesAnalise)
+          : await expoFetch(urlAnalise, opcoesAnalise);
+
+      if (!resposta.ok) {
+        throw new Error(await mensagemErro(resposta as Response));
+      }
+
       const dados = await resposta.json() as RespostaAPI;
+
       setResultado({
         ...dados,
         analise_id: analiseId,
         imagem_original_url: dadosFoto.imagem_original_url ?? null,
         imagem_processada_url: dadosFoto.imagem_processada_url ?? null,
         imagem_bordas_url: dadosFoto.imagem_bordas_url ?? null,
-        medidas_geometricas: dados.medidas_geometricas ?? dadosFoto.medidas_geometricas,
+        medidas_geometricas:
+          dados.medidas_geometricas ?? dadosFoto.medidas_geometricas,
         analise_tecnica: dadosFoto.analise_tecnica,
       });
-      // Gera imagens a partir dos polígonos já persistidos, sem chamar as IAs novamente.
+
+      // Gera imagens dos polígonos já persistidos,
+      // sem solicitar novas análises às IAs.
       try {
         setGerandoMarcacoes(true);
-        const visualizacoes = await apiJson<{ marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'] }>(
+
+        const visualizacoes = await apiJson<{
+          marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'];
+        }>(
           `/pacientes/${pacienteId}/analises/${analiseId}/marcacoes/gerar`,
-          { method: 'POST' },
+          { method: 'POST' }
         );
-        setResultado(anterior => anterior ? { ...anterior, ...visualizacoes } : anterior);
+
+        setResultado(anterior =>
+          anterior ? { ...anterior, ...visualizacoes } : anterior
+        );
       } catch {
-        // Não invalida a análise clínica se a visualização opcional falhar.
-        // O usuário pode tentar novamente no botão da seção de fotografias.
-      } finally { setGerandoMarcacoes(false); }
-      const lista = Object.values(dados.analise_multimodal?.resultados || {});
-      const sucessos = lista.filter((item) => item.sucesso).length;
-      setStatusApi(sucessos > 0
-        ? `${sucessos} de ${lista.length} análises concluídas. Confira os resultados abaixo.`
-        : 'Não foi possível concluir a análise. Você pode consultar a avaliação no prontuário.');
+        // A visualização é opcional e não invalida a análise.
+      } finally {
+        setGerandoMarcacoes(false);
+      }
+
+      const lista = Object.values(
+        dados.analise_multimodal?.resultados || {}
+      );
+      const sucessos = lista.filter(item => item.sucesso).length;
+
+      setStatusApi(
+        sucessos > 0
+          ? `${sucessos} de ${lista.length} análises concluídas. Confira os resultados abaixo.`
+          : 'Não foi possível concluir a análise. Você pode consultar a avaliação no prontuário.'
+      );
     } catch (erro) {
-      setStatusApi(analiseId
-        ? 'Não foi possível concluir a análise. Consulte o prontuário antes de tentar novamente.'
-        : 'Erro ao criar avaliação.');
-      Aviso.alert('Não foi possível concluir', 'Confira sua conexão e os dados informados. Se o problema continuar, tente novamente mais tarde.');
-    } finally { setCarregando(false); }
+      setStatusApi(
+        analiseId
+          ? 'Não foi possível concluir a análise. Consulte o prontuário antes de tentar novamente.'
+          : 'Erro ao criar avaliação.'
+      );
+
+      Aviso.alert(
+        'Não foi possível concluir',
+        'Confira sua conexão e os dados informados. Se o problema continuar, tente novamente mais tarde.'
+      );
+    } finally {
+      setCarregando(false);
+    }
   };
 
   const atualizarFotografias = async () => {
     if (!resultado?.analise_id || !pacienteId) return;
+
     try {
       const [imagens, visualizacoes] = await Promise.all([
-        apiJson<ImagensAvaliacao>(`/pacientes/${pacienteId}/analises/${resultado.analise_id}/imagens`),
-        apiJson<{ marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'] }>(
-          `/pacientes/${pacienteId}/analises/${resultado.analise_id}/marcacoes`,
+        apiJson<ImagensAvaliacao>(
+          `/pacientes/${pacienteId}/analises/${resultado.analise_id}/imagens`
+        ),
+        apiJson<{
+          marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'];
+        }>(
+          `/pacientes/${pacienteId}/analises/${resultado.analise_id}/marcacoes`
         ).catch(() => null),
       ]);
-      setResultado(anterior => anterior ? { ...anterior, ...imagens, ...(visualizacoes || {}) } : anterior);
+
+      setResultado(anterior =>
+        anterior
+          ? { ...anterior, ...imagens, ...(visualizacoes || {}) }
+          : anterior
+      );
     } catch (e) {
-      Aviso.alert('Fotografias', e instanceof Error ? e.message : 'Não foi possível atualizar as imagens.');
+      Aviso.alert(
+        'Fotografias',
+        e instanceof Error
+          ? e.message
+          : 'Não foi possível atualizar as imagens.'
+      );
     }
   };
 
   const gerarMarcacoes = async () => {
     if (!resultado?.analise_id || !pacienteId) return;
+
     setGerandoMarcacoes(true);
+
     try {
-      const dados = await apiJson<{ marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'] }>(
+      const dados = await apiJson<{
+        marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'];
+      }>(
         `/pacientes/${pacienteId}/analises/${resultado.analise_id}/marcacoes/gerar`,
-        { method: 'POST' },
+        { method: 'POST' }
       );
-      setResultado(anterior => anterior ? { ...anterior, ...dados } : anterior);
+
+      setResultado(anterior =>
+        anterior ? { ...anterior, ...dados } : anterior
+      );
     } catch (erro) {
-      Aviso.alert('Marcações', erro instanceof Error ? erro.message : 'Não foi possível gerar as imagens.');
-    } finally { setGerandoMarcacoes(false); }
+      Aviso.alert(
+        'Marcações',
+        erro instanceof Error
+          ? erro.message
+          : 'Não foi possível gerar as imagens.'
+      );
+    } finally {
+      setGerandoMarcacoes(false);
+    }
   };
 
   const reprocessarOpenAI = async () => {
     if (!resultado?.analise_id || !pacienteId) return;
+
     setReprocessandoOpenAI(true);
+
     try {
-      const resposta = await apiJson<{ total_regioes: number; mensagem: string }>(
+      const resposta = await apiJson<{
+        total_regioes: number;
+        mensagem: string;
+      }>(
         `/pacientes/${pacienteId}/analises/${resultado.analise_id}/marcacoes/openai/reprocessar`,
-        { method: 'POST' },
+        { method: 'POST' }
       );
+
       if (resposta.total_regioes > 0) {
-        const imagensMarcadas = await apiJson<{ marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'] }>(
+        const imagensMarcadas = await apiJson<{
+          marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'];
+        }>(
           `/pacientes/${pacienteId}/analises/${resultado.analise_id}/marcacoes/gerar`,
-          { method: 'POST' },
+          { method: 'POST' }
         );
-        setResultado(anterior => anterior ? { ...anterior, ...imagensMarcadas } : anterior);
+
+        setResultado(anterior =>
+          anterior ? { ...anterior, ...imagensMarcadas } : anterior
+        );
+
         await atualizarFotografias();
-        Aviso.alert('OpenAI — proposta complementar', `${resposta.total_regioes} região(ões) proposta(s). Confira as marcações. Reabra a avaliação antes de importar no editor.`);
+
+        Aviso.alert(
+          'OpenAI — proposta complementar',
+          `${resposta.total_regioes} região(ões) proposta(s). Confira as marcações. Reabra a avaliação antes de importar no editor.`
+        );
       } else {
         await atualizarFotografias();
         Aviso.alert('Sem coordenadas', resposta.mensagem);
       }
     } catch (erro) {
-      Aviso.alert('OpenAI', erro instanceof Error ? erro.message : 'Falha ao tentar obter contornos.');
-    } finally { setReprocessandoOpenAI(false); }
+      Aviso.alert(
+        'OpenAI',
+        erro instanceof Error
+          ? erro.message
+          : 'Falha ao tentar obter contornos.'
+      );
+    } finally {
+      setReprocessandoOpenAI(false);
+    }
   };
 
   const salvarRevisao = async () => {
-    if (!resultado?.analise_id || !provedorEscolhido || !revisao.trim()) {
-      Aviso.alert('Revisão necessária', 'Selecione uma análise e preencha a descrição revisada.');
+    if (
+      !resultado?.analise_id ||
+      !provedorEscolhido ||
+      !revisao.trim()
+    ) {
+      Aviso.alert(
+        'Revisão necessária',
+        'Selecione uma análise e preencha a descrição revisada.'
+      );
       return;
     }
+
     setSalvandoRevisao(true);
+
     try {
-      await apiJson(`/analises/${resultado.analise_id}/relatorios/${provedorEscolhido}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ campo: 'conteudo_descricao', novo_valor: revisao.trim() }),
-      });
+      await apiJson(
+        `/analises/${resultado.analise_id}/relatorios/${provedorEscolhido}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({
+            campo: 'conteudo_descricao',
+            novo_valor: revisao.trim(),
+          }),
+        }
+      );
+
       setValidado(true);
       Aviso.alert('Revisão salva', 'Revisão salva com sucesso.');
     } catch (e) {
-      Aviso.alert('Erro ao salvar revisão', e instanceof Error ? e.message : 'Falha desconhecida.');
-    } finally { setSalvandoRevisao(false); }
+      Aviso.alert(
+        'Erro ao salvar revisão',
+        e instanceof Error ? e.message : 'Falha desconhecida.'
+      );
+    } finally {
+      setSalvandoRevisao(false);
+    }
   };
 
   const selecionarProvedor = (nome: string) => {
     setProvedorEscolhido(nome);
     setValidado(false);
+
     setRevisao(
-      resultados[nome]?.resposta?.conteudo_descricao || '',
+      resultados[nome]?.resposta?.conteudo_descricao || ''
     );
   };
 
@@ -392,7 +568,9 @@ export default function NovaAvaliacaoScreen() {
       keyboardShouldPersistTaps="handled"
     >
       <Text style={styles.titulo}>Nova avaliação</Text>
-      <Text style={styles.textoMenor}>Prontuário nº {pacienteId || 'Não selecionado'}</Text>
+      <Text style={styles.textoMenor}>
+        Prontuário nº {pacienteId || 'Não selecionado'}
+      </Text>
 
       {statusApi ? (
         <Text style={styles.status}>{statusApi}</Text>
@@ -421,13 +599,16 @@ export default function NovaAvaliacaoScreen() {
         alterar={setTipoExsudato}
       />
 
-      <Text style={styles.rotulo}>Odor informado pelo profissional</Text>
+      <Text style={styles.rotulo}>
+        Odor informado pelo profissional
+      </Text>
+
       <View style={styles.linha}>
         {[
           { valor: '', titulo: 'Não avaliado' },
           { valor: 'sim', titulo: 'Presente' },
           { valor: 'nao', titulo: 'Ausente' },
-        ].map((opcao) => (
+        ].map(opcao => (
           <TouchableOpacity
             key={opcao.titulo}
             style={[
@@ -438,7 +619,9 @@ export default function NovaAvaliacaoScreen() {
               setOdor(opcao.valor as 'sim' | 'nao' | '')
             }
           >
-            <Text style={styles.textoMenor}>{opcao.titulo}</Text>
+            <Text style={styles.textoMenor}>
+              {opcao.titulo}
+            </Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -476,7 +659,9 @@ export default function NovaAvaliacaoScreen() {
         onPress={() => selecionarImagem(true)}
         disabled={carregando}
       >
-        <Text style={styles.botaoTexto}>Tirar fotografia</Text>
+        <Text style={styles.botaoTexto}>
+          Tirar fotografia
+        </Text>
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -484,12 +669,16 @@ export default function NovaAvaliacaoScreen() {
         onPress={() => selecionarImagem(false)}
         disabled={carregando}
       >
-        <Text style={styles.botaoTexto}>Selecionar da galeria</Text>
+        <Text style={styles.botaoTexto}>
+          Selecionar da galeria
+        </Text>
       </TouchableOpacity>
 
-      <Text style={styles.titulo}>3. Inteligências artificiais</Text>
+      <Text style={styles.titulo}>
+        3. Inteligências artificiais
+      </Text>
 
-      {PROVEDORES.map((item) => (
+      {PROVEDORES.map(item => (
         <TouchableOpacity
           key={item.valor}
           style={[
@@ -499,7 +688,9 @@ export default function NovaAvaliacaoScreen() {
           onPress={() => setProvedor(item.valor)}
           disabled={carregando}
         >
-          <Text style={styles.texto}>{item.titulo}</Text>
+          <Text style={styles.texto}>
+            {item.titulo}
+          </Text>
         </TouchableOpacity>
       ))}
 
@@ -519,35 +710,77 @@ export default function NovaAvaliacaoScreen() {
 
       {resultado ? (
         <>
-          <Text style={styles.titulo}>4. Resultados</Text>
+          <Text style={styles.titulo}>
+            4. Resultados
+          </Text>
 
           <View style={styles.card}>
-            <Text style={styles.texto}>Confira as análises disponíveis e revise os resultados.</Text>
+            <Text style={styles.texto}>
+              Confira as análises disponíveis e revise os resultados.
+            </Text>
             <Text style={styles.textoMenor}>
               Avaliação nº {resultado.analise_id}
             </Text>
-
           </View>
 
-          <FotografiasAvaliacao imagens={resultado} onAtualizar={atualizarFotografias} onGerar={gerarMarcacoes} gerando={gerandoMarcacoes} onReprocessarOpenAI={reprocessarOpenAI} reprocessandoOpenAI={reprocessandoOpenAI} />
-          {pacienteId && resultado.analise_id ? <EditorMarcacoes pacienteId={pacienteId} analiseId={resultado.analise_id} /> : null}
+          {/* ETAPA 2J: CONFIANÇA DAS TRÊS IAS */}
+          <ComparacaoConfiancaIA
+            resultados={resultados}
+          />
+
+          <FotografiasAvaliacao
+            imagens={resultado}
+            onAtualizar={atualizarFotografias}
+            onGerar={gerarMarcacoes}
+            gerando={gerandoMarcacoes}
+            onReprocessarOpenAI={reprocessarOpenAI}
+            reprocessandoOpenAI={reprocessandoOpenAI}
+          />
+
+          {pacienteId && resultado.analise_id ? (
+            <EditorMarcacoes
+              pacienteId={pacienteId}
+              analiseId={resultado.analise_id}
+            />
+          ) : null}
 
           {resultado.comparacao_multimodal?.componentes ? (
             <View style={styles.card}>
-              <Text style={styles.subtitulo}>Comparação das análises T.I.M.E.S.</Text>
-              {Object.entries(resultado.comparacao_multimodal.componentes).map(([letra, componente]) => (
+              <Text style={styles.subtitulo}>
+                Comparação das análises T.I.M.E.S.
+              </Text>
+
+              {Object.entries(
+                resultado.comparacao_multimodal.componentes
+              ).map(([letra, componente]) => (
                 <View key={letra} style={styles.bloco}>
-                  <Text style={styles.rotulo}>{letra} — {componente.nome || ''}</Text>
-                  <Text style={styles.texto}>Comparação descritiva: {componente.situacao_descritiva || 'Inconclusiva'}</Text>
-                  <Text style={styles.textoMenor}>Diferença no estado de avaliação: {componente.divergencia_status ? 'Sim' : 'Não'}</Text>
-                  <Text style={styles.textoMenor}>{componente.observacao_descritiva || ''}</Text>
+                  <Text style={styles.rotulo}>
+                    {letra} — {componente.nome || ''}
+                  </Text>
+                  <Text style={styles.texto}>
+                    Comparação descritiva:{' '}
+                    {componente.situacao_descritiva || 'Inconclusiva'}
+                  </Text>
+                  <Text style={styles.textoMenor}>
+                    Diferença no estado de avaliação:{' '}
+                    {componente.divergencia_status ? 'Sim' : 'Não'}
+                  </Text>
+                  <Text style={styles.textoMenor}>
+                    {componente.observacao_descritiva || ''}
+                  </Text>
                 </View>
               ))}
-              <Text style={styles.textoMenor}>Comparação auxiliar; não determina diagnóstico ou concordância clínica.</Text>
+
+              <Text style={styles.textoMenor}>
+                Comparação auxiliar; não determina diagnóstico
+                ou concordância clínica.
+              </Text>
             </View>
           ) : null}
 
-          <Text style={styles.titulo}>Resultados das IAs</Text>
+          <Text style={styles.titulo}>
+            Resultados das IAs
+          </Text>
 
           {Object.entries(resultados).map(([nome, item]) => (
             <View key={nome} style={styles.card}>
@@ -555,7 +788,6 @@ export default function NovaAvaliacaoScreen() {
                 {nome.toUpperCase()} —{' '}
                 {item.sucesso ? 'SUCESSO' : 'FALHA'}
               </Text>
-
 
               {item.sucesso && item.resposta ? (
                 <>
@@ -572,7 +804,8 @@ export default function NovaAvaliacaoScreen() {
                 </>
               ) : (
                 <Text style={styles.erro}>
-                  Não foi possível concluir esta análise. Tente novamente mais tarde.
+                  Não foi possível concluir esta análise.
+                  Tente novamente mais tarde.
                 </Text>
               )}
             </View>
@@ -583,17 +816,21 @@ export default function NovaAvaliacaoScreen() {
               <Text style={styles.titulo}>
                 5. Revisão profissional
               </Text>
+
               <Text style={styles.texto}>
-                Análise selecionada: {provedorEscolhido.toUpperCase()}
+                Análise selecionada:{' '}
+                {provedorEscolhido.toUpperCase()}
               </Text>
+
               <Text style={styles.textoMenor}>
-                Confira a descrição e faça as correções necessárias antes de salvar.
+                Confira a descrição e faça as correções
+                necessárias antes de salvar.
               </Text>
 
               <TextInput
                 style={[styles.input, styles.revisao]}
                 value={revisao}
-                onChangeText={(texto) => {
+                onChangeText={texto => {
                   setRevisao(texto);
                   setValidado(false);
                 }}
@@ -606,8 +843,12 @@ export default function NovaAvaliacaoScreen() {
                 onPress={salvarRevisao}
                 disabled={salvandoRevisao}
               >
-                {salvandoRevisao ? <ActivityIndicator color="#fff" /> : (
-                  <Text style={styles.botaoTexto}>Salvar revisão</Text>
+                {salvandoRevisao ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.botaoTexto}>
+                    Salvar revisão
+                  </Text>
                 )}
               </TouchableOpacity>
 
@@ -623,11 +864,12 @@ export default function NovaAvaliacaoScreen() {
             <Text style={styles.subtitulo}>
               Validação profissional obrigatória
             </Text>
+
             <Text style={styles.texto}>
               As respostas automatizadas podem conter erros.
               As classificações de tecidos, os percentuais,
-              e as sugestões de cuidado não
-              substituem a avaliação presencial do enfermeiro.
+              e as sugestões de cuidado não substituem
+              a avaliação presencial do enfermeiro.
             </Text>
           </View>
         </>
