@@ -1,3 +1,4 @@
+
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
@@ -62,9 +63,11 @@ export default function PacientesScreen() {
             <Text style={styles.seta}>➔</Text>
           </TouchableOpacity>
         )}
-        ListEmptyComponent={!carregando && !erro ? (
-          <Text style={styles.emptyText}>Nenhum paciente encontrado.</Text>
-        ) : null}
+        ListEmptyComponent={
+          !carregando && !erro
+            ? <Text style={styles.emptyText}>Nenhum paciente encontrado.</Text>
+            : undefined
+        }
       />
       <TouchableOpacity
         style={styles.btnNovoPaciente}
