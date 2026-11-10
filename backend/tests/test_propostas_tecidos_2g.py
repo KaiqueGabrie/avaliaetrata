@@ -49,10 +49,23 @@ def test_cor_isolada_nao_gera_classificacao():
     assert regioes_para_editor(regioes, 'kimi')[0]['classe'] == 'nao_classificado'
 
 
-def test_baixa_confianca_downgrade_sem_descartar_poligono():
-    regioes, _ = validar_regioes_propostas([proposta(classe='esfacelo', confianca_classificacao='baixa')])
+def test_baixa_confianca_preserva_hipotese_para_revisao():
+    regioes, _ = validar_regioes_propostas([
+        proposta(
+            classe='esfacelo',
+            confianca_classificacao='baixa',
+        )
+    ])
+
     assert len(regioes) == 1
-    assert regioes[0].classificacao_tecido_proposta == 'nao_classificado'
+    assert regioes[0].classificacao_tecido_proposta == 'esfacelo'
+    assert regioes[0].confianca_classificacao_autodeclarada == 'baixa'
+    assert regioes[0].revisao_profissional_necessaria is True
+
+    convertido = regioes_para_editor(regioes, 'gemini')[0]
+    assert convertido['classe_proposta_ia'] == 'esfacelo'
+    assert convertido['confianca_classificacao_ia'] == 'baixa'
+
 
 
 def test_tipo_visual_nao_e_classificacao_de_tecido():

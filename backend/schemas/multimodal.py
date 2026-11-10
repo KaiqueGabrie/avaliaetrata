@@ -171,6 +171,14 @@ class PlanoCuidadosProposto(SchemaBase):
 class RespostaEstruturadaModelo(SchemaBase):
     """Contrato único para Gemini, OpenAI e Kimi."""
 
+    confianca_avaliacao_percentual: Optional[float] = Field(
+        default=None, ge=0, le=100
+    )
+    justificativa_confianca_avaliacao: Optional[str] = None
+    limitacoes_confianca_avaliacao: List[str] = Field(
+        default_factory=list
+    )
+
     status_resposta: str = "sucesso"
     conteudo_descricao: str = ""
     limitacoes_declaradas: List[str] = Field(default_factory=list)

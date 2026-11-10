@@ -50,6 +50,38 @@ export default function RelatorioCompleto({ resposta, mostrarDescricao = true }:
         <Text style={styles.texto}>{resposta.conteudo_descricao || 'Não informada.'}</Text>
       </> : null}
       <Linha titulo="Estado da resposta" valor={resposta.status_resposta} />
+
+      <View style={styles.confiancaCard}>
+        <Text style={styles.rotulo}>
+          Confiança autodeclarada da avaliação visual
+        </Text>
+
+        <Text style={styles.confiancaValor}>
+          {resposta.confianca_avaliacao_percentual == null
+            ? 'Não informada'
+            : `${resposta.confianca_avaliacao_percentual.toLocaleString(
+                'pt-BR',
+                { maximumFractionDigits: 1 }
+              )}%`}
+        </Text>
+
+        <Text style={styles.menor}>
+          Estimativa subjetiva da IA. Não representa
+          precisão clínica comprovada.
+        </Text>
+
+        {resposta.justificativa_confianca_avaliacao ? (
+          <Linha
+            titulo="Justificativa"
+            valor={resposta.justificativa_confianca_avaliacao}
+          />
+        ) : null}
+
+        <Lista
+          titulo="Limitações da confiança"
+          itens={resposta.limitacoes_confianca_avaliacao}
+        />
+      </View>
       <Linha titulo="Revisão profissional necessária" valor={resposta.validacao_profissional_necessaria ? 'Sim' : 'Não'} />
     </View>
 
@@ -165,6 +197,20 @@ export default function RelatorioCompleto({ resposta, mostrarDescricao = true }:
 }
 
 const styles = StyleSheet.create({
+  confiancaCard: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 8,
+    padding: 12,
+    marginVertical: 12,
+  },
+  confiancaValor: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#0056b3',
+    marginTop: 5,
+  },
   descricao: { backgroundColor: '#f8fafc', padding: 12, borderRadius: 8, marginTop: 8 },
   secao: { borderTopWidth: 1, borderTopColor: '#e2e8f0', marginTop: 8 },
   cabecalho: { paddingVertical: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' },

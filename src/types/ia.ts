@@ -24,6 +24,10 @@ export interface RegiaoIdentificada {
 }
 
 export interface RespostaEstruturadaIA {
+  confianca_avaliacao_percentual?: number | null;
+  justificativa_confianca_avaliacao?: string | null;
+  limitacoes_confianca_avaliacao?: string[];
+
   status_resposta: string;
   conteudo_descricao: string;
   limitacoes_declaradas: string[];

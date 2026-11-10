@@ -82,6 +82,9 @@ def construir_prompt(
     estrutura = {
         "descricao": "",
         "qualidade": "parcialmente_avaliavel",
+        "confianca_avaliacao_percentual": None,
+        "justificativa_confianca_avaliacao": "",
+        "limitacoes_confianca_avaliacao": [],
         "limitacoes": [],
         "caracteristicas": [
             {
@@ -538,7 +541,10 @@ H2. REGIÕES VISUAIS PROPOSTAS PARA MARCAÇÃO
 
 Preencha "regioes_propostas" SOMENTE se for possível
 localizar com clareza os limites VISUAIS na fotografia.
-Uma lista vazia é a resposta correta quando houver dúvida.
+Proponha regiões quando seus limites forem visualmente
+identificáveis. Não exija certeza clínica para registrar
+uma hipótese visual fundamentada. Quando os limites não
+forem identificáveis, retorne uma lista vazia.
 
 Cada objeto deve conter EXATAMENTE:
 - "tipo_regiao": uma das categorias abaixo;
@@ -561,16 +567,26 @@ aparência. A hipótese de tecido vai no campo separado
 "classificacao_tecido_proposta" e NUNCA é confirmação clínica.
 
 CLASSIFICAÇÃO PROPOSTA DO LEITO (NOVA ETAPA 2G):
-- Para cada superfície, proponha granulação, esfacelo ou necrose
-  APENAS se houver características visuais adicionais à cor,
-  por exemplo textura, aspecto superficial e limites reconhecíveis.
+- Examine cada superfície visível em busca de características
+  morfológicas que possam sustentar uma hipótese de granulação,
+  esfacelo ou necrose.
+- Considere textura, aspecto superficial, distribuição,
+  relevo aparente e limites visuais, quando identificáveis.
+- Proponha a classe mais compatível somente quando houver
+  evidências além da cor, mesmo que a confiança seja baixa.
+- Não exija confirmação clínica para formular uma hipótese;
+  a confirmação continua sendo responsabilidade do enfermeiro.
 - Explique as evidências e limitações em "justificativa_classificacao".
 - Se a região estiver encoberta, tiver reflexos, pouca nitidez,
   ou só a tonalidade for reconhecível, use "nao_classificado".
 - Contorno geral da lesão e pele perilesional: SEMPRE
   "nao_classificado"; não representam classe do leito.
-- Confiança "baixa" ou justificativa insuficiente: a hipótese
-  será descartada pelo sistema, preservando o polígono visual.
+- Uma hipótese com confiança "baixa" pode ser preservada
+  como incerta se houver justificativa morfológica suficiente.
+- Não descarte uma hipótese somente porque sua confiança é baixa.
+- Se não houver evidência morfológica suficiente, use
+  "nao_classificado" e explique a limitação.
+- Nunca invente uma classe para aumentar o número de propostas.
 - Não invente porcentagens ou coordenadas para preencher campos.
 - Não transforme um rótulo visual em tecido automaticamente.
 - Cada provedor responde de forma independente; a confirmação
@@ -595,6 +611,52 @@ SISTEMA DE COORDENADAS:
 
 Dimensões da imagem processada (somente para referência):
 {json.dumps(entrada.dimensoes_processadas, ensure_ascii=False)}
+
+==================================================
+H3. CONFIANÇA AUTODECLARADA DA AVALIAÇÃO
+==================================================
+
+Retorne os três campos:
+
+"confianca_avaliacao_percentual"
+"justificativa_confianca_avaliacao"
+"limitacoes_confianca_avaliacao"
+
+O percentual deve representar exclusivamente sua
+confiança subjetiva na qualidade e na sustentação
+das observações visuais que você apresentou.
+
+Não representa:
+- precisão clínica comprovada;
+- probabilidade de diagnóstico correto;
+- certeza sobre a classe de cada tecido;
+- percentual de área de tecidos;
+- concordância com outros modelos.
+
+Use um número de 0 a 100 somente quando conseguir
+justificar essa estimativa com aspectos observáveis
+da fotografia e com a consistência de sua resposta.
+
+Não utilize números padronizados ou fixos.
+Não aumente a confiança apenas porque respondeu
+a todos os campos.
+
+Considere fatores como nitidez, iluminação,
+visibilidade da superfície, obstruções,
+ambiguidade morfológica e limitações da fotografia.
+
+Explique os motivos do valor informado em
+"justificativa_confianca_avaliacao".
+
+Em "limitacoes_confianca_avaliacao", liste
+as incertezas relevantes que influenciaram
+a interpretação.
+
+Quando não houver base suficiente para estimar
+essa confiança, retorne null, e não um valor inventado.
+
+A confiança é autodeclarada e não calibrada.
+A validação clínica pertence ao profissional.
 
 ==================================================
 I. PONTOS PARA REVISÃO PROFISSIONAL
@@ -737,6 +799,36 @@ def normalizar_resposta(
         r.status_resposta = "sucesso_parcial"
 
     r.conteudo_descricao = descricao.strip()
+
+    # Confiança subjetiva da avaliação visual.
+    # Nunca inferir percentuais a partir de rótulos
+    # como baixa, moderada ou alta.
+    percentual = dados.get("confianca_avaliacao_percentual")
+
+    if (
+        isinstance(percentual, (int, float))
+        and not isinstance(percentual, bool)
+        and __import__("math").isfinite(percentual)
+        and 0 <= percentual <= 100
+    ):
+        r.confianca_avaliacao_percentual = float(percentual)
+
+    justificativa_confianca = dados.get(
+        "justificativa_confianca_avaliacao"
+    )
+
+    if isinstance(justificativa_confianca, str):
+        r.justificativa_confianca_avaliacao = (
+            justificativa_confianca.strip()[:1000] or None
+        )
+
+    r.limitacoes_confianca_avaliacao = _lista_textos(
+        dados.get("limitacoes_confianca_avaliacao")
+    )
+
+    # Sem justificativa, o percentual não é apresentado.
+    if not r.justificativa_confianca_avaliacao:
+        r.confianca_avaliacao_percentual = None
 
     r.limitacoes_declaradas = _lista_textos(
         dados.get("limitacoes")

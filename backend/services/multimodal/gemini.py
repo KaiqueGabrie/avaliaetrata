@@ -176,6 +176,16 @@ class GeminiProvider(BaseModelProvider):
                     "type": "STRING",
                 },
                 "qualidade": status,
+                "confianca_avaliacao_percentual": {
+                    "type": "NUMBER",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "nullable": True,
+                },
+                "justificativa_confianca_avaliacao": {
+                    "type": "STRING",
+                },
+                "limitacoes_confianca_avaliacao": lista_textos,
                 "limitacoes": lista_textos,
                 "caracteristicas": {
                     "type": "ARRAY",
