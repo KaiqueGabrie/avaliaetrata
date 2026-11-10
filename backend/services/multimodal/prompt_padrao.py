@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from services.multimodal.validacao_regioes import validar_regioes_propostas
+from services.multimodal.auditoria_contornos import auditar_contornos
 from services.medidas_geometricas import calcular_estimativas
 
 from schemas.multimodal import (
@@ -833,6 +834,7 @@ def normalizar_resposta(
     r.limitacoes_declaradas = _lista_textos(
         dados.get("limitacoes")
     )
+
     if faltantes:
         r.limitacoes_declaradas.append(
             "Resposta automatizada incompleta: "
@@ -1067,36 +1069,62 @@ def normalizar_resposta(
         "segmentação validada.",
     ]
 
-    # MARCAÇÕES: coordenadas apenas PROPOSTAS e validadas geometricamente.
-    # Nao desenhar/salvar como imagem aprovada nesta etapa.
+    # MARCAÇÕES: propostas com geometria válida.
+    # A auditoria verifica a coerência geométrica
+    # sem alterar os pontos ou a classificação.
+
     regioes, limitacoes_regioes = validar_regioes_propostas(
         dados.get("regioes_propostas", [])
     )
+
     r.marcacoes_imagem.regioes = regioes
     r.marcacoes_imagem.limitacoes = limitacoes_regioes
-    if any(regiao.classificacao_tecido_proposta in ('granulacao', 'esfacelo', 'necrose') for regiao in regioes):
-        # A IA fez uma hipótese estruturada, não uma classificação clínica confirmada.
-        r.avaliacao_tecidos.status = 'parcialmente_avaliavel'
+
+    # ETAPA 2J — AUDITORIA DOS CONTORNOS
+    # Compara as regiões de superfície com o contorno
+    # aparente proposto pela mesma IA.
+    # Não equivale a uma segmentação validada.
+
+    alertas_contornos = auditar_contornos(regioes)
+
+    r.marcacoes_imagem.limitacoes.extend(
+        alertas_contornos
+    )
+
+    if any(
+        regiao.classificacao_tecido_proposta
+        in ("granulacao", "esfacelo", "necrose")
+        for regiao in regioes
+    ):
+        # Hipóteses visuais não confirmadas clinicamente.
+        r.avaliacao_tecidos.status = "parcialmente_avaliavel"
         r.avaliacao_tecidos.limitacoes.append(
-            'Existem hipóteses de tecidos vinculadas a polígonos na seção de marcações; '
-            'não são percentuais nem classificações confirmadas.'
+            "Existem hipóteses de tecidos vinculadas "
+            "a polígonos na seção de marcações; "
+            "não são percentuais nem classificações confirmadas."
         )
+
     if not regioes:
         r.marcacoes_imagem.limitacoes.append(
-            "Nenhuma região com geometria suficiente foi proposta; "
-            "a fotografia permanece sem marcações clínicas."
+            "Nenhuma região com geometria suficiente "
+            "foi proposta; a fotografia permanece "
+            "sem marcações clínicas."
         )
 
     # PONTOS PARA REVISÃO PROFISSIONAL
 
-    r.pontos_para_revisao_profissional = (
-        _lista_textos(
-            dados.get("pontos_revisao")
-        )
+    r.pontos_para_revisao_profissional = _lista_textos(
+        dados.get("pontos_revisao")
     )
 
     r.pontos_para_revisao_profissional.extend(
         avisos
+    )
+
+    # Alertas geométricos também aparecem nos pontos
+    # destinados à revisão profissional.
+    r.pontos_para_revisao_profissional.extend(
+        alertas_contornos
     )
 
     if not r.pontos_para_revisao_profissional:
@@ -1138,8 +1166,8 @@ def normalizar_resposta(
             )
 
     # MEDIDAS
-    # Preservam-se os valores do profissional,
-    # sem inferir área real pela fotografia.
+    # Preserva valores do profissional.
+    # Não infere área real a partir da fotografia.
 
     r.medidas.comprimento_informado_cm = (
         d.comprimento
@@ -1149,12 +1177,24 @@ def normalizar_resposta(
         d.largura
     )
 
-    estimativas = calcular_estimativas(d.comprimento, d.largura)
-    r.medidas.area_retangulo_delimitador_cm2 = estimativas["area_retangulo_delimitador_cm2"]
-    r.medidas.area_elipse_aproximada_cm2 = estimativas["area_elipse_aproximada_cm2"]
+    estimativas = calcular_estimativas(
+        d.comprimento,
+        d.largura
+    )
+
+    r.medidas.area_retangulo_delimitador_cm2 = (
+        estimativas["area_retangulo_delimitador_cm2"]
+    )
+
+    r.medidas.area_elipse_aproximada_cm2 = (
+        estimativas["area_elipse_aproximada_cm2"]
+    )
+
     r.medidas.observacoes = [
         estimativas["observacao"],
-        "Área real segmentada não calculada; não existe escala fotográfica e segmentação clínica validadas.",
+        "Área real segmentada não calculada; "
+        "não existe escala fotográfica e "
+        "segmentação clínica validadas.",
     ]
 
     return r

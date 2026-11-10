@@ -729,6 +729,16 @@ export default function NovaAvaliacaoScreen() {
           />
 
           <FotografiasAvaliacao
+            alertasContornos={Object.fromEntries(
+              Object.entries(resultados).map(([nome, item]) => [
+                nome.toLowerCase(),
+                (
+                  item.resposta?.marcacoes_imagem?.limitacoes ?? []
+                ).filter(aviso =>
+                  aviso.startsWith('[AUDITORIA_CONTORNO]')
+                ),
+              ])
+            )}
             imagens={resultado}
             onAtualizar={atualizarFotografias}
             onGerar={gerarMarcacoes}

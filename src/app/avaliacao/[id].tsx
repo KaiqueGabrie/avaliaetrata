@@ -399,6 +399,19 @@ export default function DetalheAvaliacaoScreen() {
 
       {imagens ? (
         <FotografiasAvaliacao
+          alertasContornos={Object.fromEntries(
+            relatorios.map(relatorio => [
+              relatorio.provedor.toLowerCase(),
+              (
+                (
+                  relatorio.conteudo_original ??
+                  relatorio.conteudo_editavel
+                )?.marcacoes_imagem?.limitacoes ?? []
+              ).filter(aviso =>
+                aviso.startsWith('[AUDITORIA_CONTORNO]')
+              ),
+            ])
+          )}
           imagens={imagens}
           onAtualizar={atualizarFotografias}
           onGerar={gerarMarcacoes}

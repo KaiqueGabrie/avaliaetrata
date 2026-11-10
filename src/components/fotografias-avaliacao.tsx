@@ -208,6 +208,7 @@ export default function FotografiasAvaliacao({
   gerando = false,
   onReprocessarOpenAI,
   reprocessandoOpenAI = false,
+  alertasContornos = {},
 }: {
   imagens: ImagensAvaliacao;
   onAtualizar?: () => void;
@@ -215,6 +216,7 @@ export default function FotografiasAvaliacao({
   gerando?: boolean;
   onReprocessarOpenAI?: () => void;
   reprocessandoOpenAI?: boolean;
+  alertasContornos?: Record<string, string[]>;
 }) {
   const [aba, setAba] = useState('gemini');
   const [comparar, setComparar] = useState(false);
@@ -245,6 +247,7 @@ export default function FotografiasAvaliacao({
     compacta = false
   ) => {
     const dados = marcacoes[provedor.id];
+    const alertas = alertasContornos[provedor.id] ?? [];
 
     return (
       <View
@@ -257,6 +260,33 @@ export default function FotografiasAvaliacao({
               : styles.marcacaoCheia),
         ]}
       >
+        {alertas.length > 0 ? (
+          <View style={styles.alertaContorno}>
+            <Text style={styles.tituloAlerta}>
+              Atenção aos contornos — {provedor.nome}
+            </Text>
+
+            {alertas.map((aviso, indice) => (
+              <Text
+                key={`${provedor.id}-alerta-${indice}`}
+                style={styles.textoAlerta}
+              >
+                • {aviso.replace(
+                  '[AUDITORIA_CONTORNO]',
+                  ''
+                ).trim()}
+              </Text>
+            ))}
+
+            <Text style={styles.textoAlerta}>
+              Estes avisos indicam possíveis
+              inconsistências geométricas entre
+              propostas da mesma IA. O enfermeiro
+              deve conferir os contornos na fotografia.
+            </Text>
+          </View>
+        ) : null}
+
         {dados?.url ? (
           <>
             <Fotografia
@@ -519,6 +549,26 @@ export default function FotografiasAvaliacao({
 }
 
 const styles = StyleSheet.create({
+  alertaContorno: {
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+  },
+  tituloAlerta: {
+    color: '#92400e',
+    fontSize: 13,
+    fontWeight: 'bold',
+    marginBottom: 7,
+  },
+  textoAlerta: {
+    color: '#78350f',
+    fontSize: 12,
+    lineHeight: 18,
+    marginBottom: 5,
+  },
   card: {
     backgroundColor: '#fff',
     borderWidth: 1,
