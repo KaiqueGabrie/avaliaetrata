@@ -111,6 +111,23 @@ def _caixa(
     )
 
 
+def _area_poligono(
+    pontos: list[tuple[float, float]],
+) -> float:
+    if len(pontos) < 3:
+        return 0.0
+
+    soma = 0.0
+
+    for indice in range(len(pontos)):
+        x1, y1 = pontos[indice]
+        x2, y2 = pontos[(indice + 1) % len(pontos)]
+
+        soma += x1 * y2 - x2 * y1
+
+    return abs(soma) / 2.0
+
+
 def _afastamento_caixas(
     primeira: list[tuple[float, float]],
     segunda: list[tuple[float, float]],
@@ -214,5 +231,43 @@ def auditar_contornos(
                     "Confirme se realmente corresponde "
                     "à pele adjacente à lesão."
                 )
+
+            # Alerta adicional para marcações muito amplas.
+            # Valores heurísticos em coordenadas normalizadas.
+            # Não representam percentuais clínicos de tecido.
+            area_perilesional = _area_poligono(pontos)
+
+            areas_contorno = [
+                _area_poligono(contorno)
+                for contorno in contornos
+            ]
+
+            areas_contorno = [
+                area for area in areas_contorno
+                if area > 0
+            ]
+
+            if areas_contorno:
+                maior_area_contorno = max(areas_contorno)
+
+                razao_areas = (
+                    area_perilesional / maior_area_contorno
+                )
+
+                if (
+                    area_perilesional > 0.20
+                    and razao_areas > 2.25
+                ):
+                    alertas.append(
+                        "[AUDITORIA_CONTORNO] "
+                        f"A região '{regiao.identificador}' "
+                        "abrange uma área geométrica "
+                        "consideravelmente maior que o "
+                        "contorno principal proposto pela IA. "
+                        "Essa diferença pode ser legítima "
+                        "para a pele perilesional, mas exige "
+                        "conferência do enquadramento e "
+                        "dos vértices na fotografia."
+                    )
 
     return alertas

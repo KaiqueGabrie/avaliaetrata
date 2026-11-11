@@ -114,17 +114,39 @@ def test_sem_contorno_nao_inventa_referencia():
     assert auditar_contornos(regioes) == []
 
 
-def test_pele_perilesional_nao_e_sinalizada():
+def test_pele_perilesional_ampla_e_sinalizada_sem_descarte():
     pele = criar_regiao(
         "pele_perilesional",
         2,
         quadrado(0.10, 0.10, 0.90, 0.90),
     )
 
-    assert auditar_contornos([
+    regioes = [
         contorno(),
         pele,
-    ]) == []
+    ]
+
+    antes = [
+        regiao.model_dump(mode="json")
+        for regiao in regioes
+    ]
+
+    alertas = auditar_contornos(regioes)
+
+    depois = [
+        regiao.model_dump(mode="json")
+        for regiao in regioes
+    ]
+
+    # Regiões perilesionais excessivamente amplas
+    # devem ser sinalizadas para revisão profissional.
+    assert len(alertas) == 1
+    assert "[AUDITORIA_CONTORNO]" in alertas[0]
+    assert "consideravelmente maior" in alertas[0]
+
+    # A auditoria não remove ou modifica os polígonos.
+    assert antes == depois
+    assert len(regioes) == 2
 
 
 def test_auditoria_nao_modifica_regioes():

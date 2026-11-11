@@ -78,7 +78,7 @@ def validar_regioes_persistidas(conteudo: Any) -> list[RegiaoIdentificada]:
         if (tipo in ('contorno_visual_lesao', 'pele_perilesional') or
                 classe not in CORES_CLASSES or
                 len(regiao.justificativa_classificacao.strip()) < 20 or
-                regiao.confianca_classificacao_autodeclarada not in ('moderada', 'alta')):
+                regiao.confianca_classificacao_autodeclarada not in ('baixa', 'moderada', 'alta')):
             regiao = regiao.model_copy(update={
                 'classificacao_tecido_proposta': 'nao_classificado',
                 'confianca_classificacao_autodeclarada': None,
@@ -91,7 +91,7 @@ def validar_regioes_persistidas(conteudo: Any) -> list[RegiaoIdentificada]:
 
 def assinatura_regioes(regioes: list[RegiaoIdentificada], caminho_referencia: str) -> str:
     dados = {
-        'versao': 2,
+        'versao': 3,
         'imagem': caminho_referencia,
         'regioes': [r.model_dump(mode='json') for r in regioes],
     }
