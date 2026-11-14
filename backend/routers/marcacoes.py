@@ -23,6 +23,7 @@ from services.visualizacao_marcacoes import (
     VisualizacaoMarcacoesService, assinatura_regioes, validar_regioes_persistidas,
 )
 from services.propostas_tecidos import regioes_para_editor, detalhes_propostas, CLASSES_TECIDO
+from services.multimodal.auditoria_anatomica import auditar_anatomia_regioes
 from services.multimodal.openai import OpenAIProvider
 from services.multimodal.complemento_regioes import _regioes_efetivas
 
@@ -226,11 +227,37 @@ def reprocessar_apenas_regioes_openai(
         logger.exception('Falha ao solicitar coordenadas complementares da OpenAI para análise %s.', analise_id)
         raise HTTPException(status_code=502, detail='Não foi possível solicitar coordenadas à OpenAI. Confira o Render e o modelo configurado.') from erro
 
+    localizacao = contexto.get('localizacao')
+    if not isinstance(localizacao, str) or not localizacao.strip():
+        conteudo = relatorio.conteudo_original
+        dados = conteudo.get('dados_clinicos_organizados') if isinstance(conteudo, dict) else None
+        localizacao = dados.get('localizacao') if isinstance(dados, dict) else None
+
+    alertas = auditar_anatomia_regioes(
+        localizacao if isinstance(localizacao, str) else None,
+        regioes,
+    )
+    if alertas:
+        regioes = []
+        status = 'inconsistencia_anatomica'
+        mensagem = (
+            'Contornos descartados por inconsistência anatômica. '
+            + ' '.join(alertas)
+            + ' O desenho manual está disponível.'
+        )
+    elif regioes:
+        status = 'proposta_nao_validada'
+        mensagem = 'Coordenadas complementares propostas; gere a imagem e revise no editor.'
+    else:
+        status = 'sem_regioes'
+        mensagem = 'A OpenAI não identificou contornos confiáveis. Utilize o desenho manual.'
+
     contexto['regioes_openai_complementares'] = {
         'imagem_referencia': caminho,
         'regioes': [r.model_dump(mode='json') for r in regioes],
         'tentativa_em': datetime.now(timezone.utc).isoformat(),
-        'status': 'proposta_nao_validada' if regioes else 'sem_regioes',
+        'status': status,
+        'alertas': alertas,
     }
     analise.contexto_clinico_json = contexto
     flag_modified(analise, 'contexto_clinico_json')
@@ -238,7 +265,7 @@ def reprocessar_apenas_regioes_openai(
         id_enfermeiro_fk=enfermeiro.id_enfermeiro,
         acao='reprocessar_regioes_openai',
         entidade='analise', registro_id=str(analise_id),
-        detalhes={'quantidade_regioes': len(regioes), 'somente_geometria': True},
+        detalhes={'quantidade_regioes': len(regioes), 'somente_geometria': True, 'status': status},
     ))
     try:
         db.commit()
@@ -250,8 +277,7 @@ def reprocessar_apenas_regioes_openai(
     response.headers['Cache-Control'] = 'private, no-store'
     return {
         'total_regioes': len(regioes),
-        'mensagem': ('Coordenadas complementares propostas; gere a imagem e revise no editor.'
-                     if regioes else 'A OpenAI não identificou contornos confiáveis. Utilize o desenho manual.'),
+        'mensagem': mensagem,
         'marcacoes_por_ia': _resumo(analise, relatorios, caminho),
     }
 
@@ -498,3 +524,4 @@ def retificar_editor_marcacoes(
         raise HTTPException(status_code=500, detail='Não foi possível abrir uma retificação.') from erro
     response.headers['Cache-Control'] = 'private, no-store'
     return {'revisao': _resposta_revisao(novo)}
+
