@@ -1,8 +1,4 @@
-"""OpenAI: relatório T.I.M.E.S. e segunda passagem visual opcional.
-
-A segunda passagem solicita SOMENTE regiões. Não fabrica contornos, não altera
-achados clínicos e não transforma hipóteses visuais em diagnóstico.
-"""
+"""OpenAI: relatório T.I.M.E.S. e segunda passagem visual opcional."""
 from __future__ import annotations
 
 import base64
@@ -17,17 +13,15 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from schemas.multimodal import AnaliseMultimodalInput, RegiaoIdentificada, ResultadoProvedor
+from services.multimodal.auditoria_anatomica import auditar_anatomia_regioes
+from services.multimodal.auditoria_contornos import auditar_contornos
 from services.multimodal.base import BaseModelProvider
 from services.multimodal.prompt_padrao import construir_prompt, normalizar_resposta
 from services.multimodal.validacao_regioes import validar_regioes_propostas
-from services.multimodal.auditoria_contornos import auditar_contornos
-from services.multimodal.auditoria_anatomica import auditar_anatomia_regioes
 
 load_dotenv()
 log = logging.getLogger(__name__)
 
-# Prompt propositalmente curto: o prompt T.I.M.E.S. é extenso e a resposta
-# pode ser válida sem que o modelo consiga fornecer coordenadas.
 PROMPT_REGIOES = """Você é um assistente de documentação visual para enfermagem.
 Observe a fotografia PROCESSADA e retorne APENAS JSON com a chave
 "regioes_propostas" (lista de zero a seis objetos).
@@ -71,20 +65,23 @@ class OpenAIProvider(BaseModelProvider):
         arquivo = Path(caminho)
         if not arquivo.is_file():
             raise FileNotFoundError('Fotografia processada indisponível para a OpenAI.')
+
         mime = mimetypes.guess_type(str(arquivo))[0] or 'image/png'
         if mime not in ('image/png', 'image/jpeg', 'image/webp'):
             raise ValueError('Formato da fotografia não suportado.')
+
         codificado = base64.b64encode(arquivo.read_bytes()).decode('ascii')
         return {'url': f'data:{mime};base64,{codificado}', 'detail': 'high'}
 
-    def propor_regioes_isoladas(self, caminho_imagem_processada: str) -> list[RegiaoIdentificada]:
-        """Uma chamada focada em coordenadas, sem reexecutar T.I.M.E.S.
-
-        Pode retornar [] legitimamente. Falhas da API são propagadas ao chamador.
-        """
+    def propor_regioes_isoladas(
+        self,
+        caminho_imagem_processada: str,
+    ) -> list[RegiaoIdentificada]:
+        """Solicita apenas coordenadas. Uma resposta válida pode trazer zero regiões."""
         chave = self._obter_api_key()
         if not chave:
             raise RuntimeError('OPENAI_API_KEY ausente')
+
         modelo = os.getenv('OPENAI_REGIOES_MODEL', 'gpt-4o').strip() or 'gpt-4o'
         with OpenAI(api_key=chave, timeout=60, max_retries=0) as cli:
             resultado = cli.chat.completions.create(
@@ -93,26 +90,42 @@ class OpenAIProvider(BaseModelProvider):
                 max_tokens=2000,
                 temperature=0,
                 messages=[
-                    {'role': 'system', 'content': 'Retorne somente JSON. Não invente coordenadas ou diagnóstico.'},
-                    {'role': 'user', 'content': [
-                        {'type': 'text', 'text': PROMPT_REGIOES},
-                        {'type': 'image_url', 'image_url': self._imagem_base64(caminho_imagem_processada)},
-                    ]},
+                    {
+                        'role': 'system',
+                        'content': 'Retorne somente JSON. Não invente coordenadas ou diagnóstico.',
+                    },
+                    {
+                        'role': 'user',
+                        'content': [
+                            {'type': 'text', 'text': PROMPT_REGIOES},
+                            {
+                                'type': 'image_url',
+                                'image_url': self._imagem_base64(caminho_imagem_processada),
+                            },
+                        ],
+                    },
                 ],
             )
+
         if not resultado.choices or resultado.choices[0].finish_reason == 'length':
             raise ValueError('A resposta de coordenadas da OpenAI foi truncada.')
+
         texto = resultado.choices[0].message.content
         if not texto:
             return []
+
         dados = json.loads(texto)
         if not isinstance(dados, dict):
             return []
+
         candidatos = dados.get('regioes_propostas', [])
         regioes, limitacoes = validar_regioes_propostas(candidatos)
-        log.info('OpenAI coordenadas: candidatos=%d, aceitos=%d, descartados=%s',
-                 len(candidatos) if isinstance(candidatos, list) else 0,
-                 len(regioes), any('descartada' in item for item in limitacoes))
+        log.info(
+            'OpenAI coordenadas: candidatos=%d, aceitos=%d, descartados=%s',
+            len(candidatos) if isinstance(candidatos, list) else 0,
+            len(regioes),
+            any('descartada' in item for item in limitacoes),
+        )
         return regioes
 
     def analisar(self, input_data: AnaliseMultimodalInput) -> ResultadoProvedor:
@@ -120,18 +133,23 @@ class OpenAIProvider(BaseModelProvider):
 
         def saida(ok=False, r=None, erro=None):
             return ResultadoProvedor(
-                provedor='openai', modo='api_real', sucesso=ok,
+                provedor='openai',
+                modo='api_real',
+                sucesso=ok,
                 tempo_execucao_segundos=round(time.monotonic() - inicio, 3),
-                resposta=r, mensagem_erro=erro,
+                resposta=r,
+                mensagem_erro=erro,
             )
 
         chave = self._obter_api_key()
         if not chave:
             return saida(erro='OPENAI_API_KEY ausente')
+
         try:
             caminho = input_data.caminho_imagem_processada
             if not os.path.isfile(caminho):
                 caminho = input_data.caminho_imagem_original
+
             with OpenAI(api_key=chave, timeout=45, max_retries=0) as cli:
                 resultado = cli.chat.completions.create(
                     model=os.getenv('OPENAI_MODEL', 'gpt-4o-mini'),
@@ -139,21 +157,43 @@ class OpenAIProvider(BaseModelProvider):
                     max_tokens=int(os.getenv('OPENAI_MAX_TOKENS', '3200')),
                     temperature=0.2,
                     messages=[
-                        {'role': 'system', 'content': 'Responda somente JSON válido. Apoio documental, sem diagnóstico.'},
-                        {'role': 'user', 'content': [
-                            {'type': 'text', 'text': construir_prompt(input_data)},
-                            {'type': 'image_url', 'image_url': self._imagem_base64(caminho)},
-                        ]},
+                        {
+                            'role': 'system',
+                            'content': 'Responda somente JSON válido. Apoio documental, sem diagnóstico.',
+                        },
+                        {
+                            'role': 'user',
+                            'content': [
+                                {'type': 'text', 'text': construir_prompt(input_data)},
+                                {'type': 'image_url', 'image_url': self._imagem_base64(caminho)},
+                            ],
+                        },
                     ],
                 )
+
             if resultado.choices[0].finish_reason == 'length':
                 return saida(erro='OpenAI: saída truncada; aumente OPENAI_MAX_TOKENS')
+
             texto = resultado.choices[0].message.content
             resposta = normalizar_resposta(json.loads(texto), input_data)
+
             if not resposta.marcacoes_imagem.regioes:
                 try:
                     regioes = self.propor_regioes_isoladas(caminho)
-                    if regioes:
+                    alertas_anatomicos = auditar_anatomia_regioes(
+                        input_data.dados_clinicos.localizacao,
+                        regioes,
+                    )
+
+                    if alertas_anatomicos:
+                        avisos = [
+                            *alertas_anatomicos,
+                            'Marcações da segunda passagem da OpenAI descartadas por '
+                            'inconsistência anatômica. Desenho manual disponível.',
+                        ]
+                        resposta.marcacoes_imagem.limitacoes.extend(avisos)
+                        resposta.pontos_para_revisao_profissional.extend(avisos)
+                    elif regioes:
                         resposta.marcacoes_imagem.regioes = regioes
                         resposta.marcacoes_imagem.limitacoes = [
                             item for item in resposta.marcacoes_imagem.limitacoes
@@ -163,36 +203,31 @@ class OpenAIProvider(BaseModelProvider):
                             'Coordenadas obtidas em segunda passagem visual da OpenAI; não validadas.'
                         )
 
-                        # Audita também as regiões da segunda
-                        # passagem, sem modificar o T.I.M.E.S.
-                        # e sem solicitar outra chamada à API.
-                        alertas_complementares = [
-                            *auditar_contornos(regioes),
-                            *auditar_anatomia_regioes(
-                                input_data.dados_clinicos.localizacao,
-                                regioes,
-                            ),
-                        ]
+                        alertas_contornos = auditar_contornos(regioes)
+                        resposta.marcacoes_imagem.limitacoes.extend(alertas_contornos)
+                        resposta.pontos_para_revisao_profissional.extend(alertas_contornos)
 
-                        resposta.marcacoes_imagem.limitacoes.extend(
-                            alertas_complementares
-                        )
-                        resposta.pontos_para_revisao_profissional.extend(
-                            alertas_complementares
-                        )
-
-                        if any(r.classificacao_tecido_proposta in ('granulacao', 'esfacelo', 'necrose') for r in regioes):
+                        if any(
+                            regiao.classificacao_tecido_proposta in ('granulacao', 'esfacelo', 'necrose')
+                            for regiao in regioes
+                        ):
                             resposta.avaliacao_tecidos.status = 'parcialmente_avaliavel'
                             resposta.avaliacao_tecidos.limitacoes.append(
-                                'Há hipótese visual complementar vinculada a polígonos; requer revisão profissional.'
+                                'Há hipótese visual complementar vinculada a polígonos; '
+                                'requer revisão profissional.'
                             )
                 except Exception:
-                    # Não perde o relatório T.I.M.E.S. quando a chamada complementar falha.
-                    log.warning('OpenAI: segunda passagem de coordenadas falhou; relatório preservado.', exc_info=True)
-                    resposta.marcacoes_imagem.limitacoes.append(
-                        'Não foi possível concluir a segunda passagem de coordenadas; desenho manual disponível.'
+                    log.warning(
+                        'OpenAI: segunda passagem de coordenadas falhou; relatório preservado.',
+                        exc_info=True,
                     )
+                    resposta.marcacoes_imagem.limitacoes.append(
+                        'Não foi possível concluir a segunda passagem de coordenadas; '
+                        'desenho manual disponível.'
+                    )
+
             return saida(True, resposta)
         except Exception as erro:
             log.exception('OpenAI falhou')
-            return saida(erro=f'OpenAI: {type(erro).__name__}: {str(erro).replace(chave, "[REDACTED]")[:250]}')
+            mensagem = str(erro).replace(chave, '[REDACTED]')[:250]
+            return saida(erro=f'OpenAI: {type(erro).__name__}: {mensagem}')
