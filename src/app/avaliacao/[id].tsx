@@ -1,11 +1,5 @@
-
-import {
-  useFocusEffect,
-  useLocalSearchParams,
-} from 'expo-router';
-
-import { useCallback, useState } from 'react';
-
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   ScrollView,
@@ -16,18 +10,15 @@ import {
   View,
 } from 'react-native';
 
-import { apiJson } from '../../config/cliente';
-import { Aviso } from '../../utils/avisos';
-
-import FotografiasAvaliacao, {
-  ImagensAvaliacao,
-} from '../../components/fotografias-avaliacao';
-
+import BotaoRelatorioPdf from '../../components/botao-relatorio-pdf';
 import ComparacaoConfiancaIA from '../../components/comparacao-confianca-ia';
 import EditorMarcacoes from '../../components/editor-marcacoes';
+import type { ImagensAvaliacao } from '../../components/fotografias-avaliacao';
+import FotografiasAvaliacao from '../../components/fotografias-avaliacao';
 import RelatorioCompleto from '../../components/relatorio-completo';
-
+import { apiJson } from '../../config/cliente';
 import type { RespostaEstruturadaIA } from '../../types/ia';
+import { Aviso } from '../../utils/avisos';
 
 type Relatorio = {
   id_relatorio: string;
@@ -61,16 +52,21 @@ type Comparacao = {
   };
 };
 
+type RespostaMarcacoes = {
+  marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'];
+};
+
 export default function DetalheAvaliacaoScreen() {
-  const { id, pacienteId } = useLocalSearchParams<{
+  const { id, pacienteId, provedor } = useLocalSearchParams<{
     id: string;
     pacienteId?: string;
+    provedor?: string;
   }>();
 
+  const selecaoInicialAplicada = useRef('');
   const [relatorios, setRelatorios] = useState<Relatorio[]>([]);
   const [imagens, setImagens] = useState<ImagensAvaliacao | null>(null);
   const [comparacoes, setComparacoes] = useState<Comparacao[]>([]);
-
   const [selecionado, setSelecionado] = useState('');
   const [descricao, setDescricao] = useState('');
   const [carregando, setCarregando] = useState(true);
@@ -91,63 +87,63 @@ export default function DetalheAvaliacaoScreen() {
     setErro('');
 
     try {
-      const [r, c, fotos, marcacoes] = await Promise.all([
-        apiJson<{ relatorios: Relatorio[] }>(
-          `/analises/${id}/relatorios`
-        ),
+      const [respostaRelatorios, respostaComparacoes, fotos, marcacoes] =
+        await Promise.all([
+          apiJson<{ relatorios: Relatorio[] }>(`/analises/${id}/relatorios`),
+          apiJson<{ comparacoes: { id_comparacao: string }[] }>(
+            `/analises/${id}/comparacoes`,
+          ),
+          pacienteId
+            ? apiJson<ImagensAvaliacao>(
+                `/pacientes/${pacienteId}/analises/${id}/imagens`,
+              ).catch(() => null)
+            : Promise.resolve(null),
+          pacienteId
+            ? apiJson<RespostaMarcacoes>(
+                `/pacientes/${pacienteId}/analises/${id}/marcacoes`,
+              ).catch(() => null)
+            : Promise.resolve(null),
+        ]);
 
-        apiJson<{
-          comparacoes: { id_comparacao: string }[];
-        }>(
-          `/analises/${id}/comparacoes`
-        ),
+      setImagens(fotos ? { ...fotos, ...(marcacoes || {}) } : null);
 
-        pacienteId
-          ? apiJson<ImagensAvaliacao>(
-              `/pacientes/${pacienteId}/analises/${id}/imagens`
-            ).catch(() => null)
-          : Promise.resolve(null),
+      const relatoriosRecebidos = respostaRelatorios.relatorios || [];
+      setRelatorios(relatoriosRecebidos);
 
-        pacienteId
-          ? apiJson<{
-              marcacoes_por_ia:
-                ImagensAvaliacao['marcacoes_por_ia'];
-            }>(
-              `/pacientes/${pacienteId}/analises/${id}/marcacoes`
-            ).catch(() => null)
-          : Promise.resolve(null),
-      ]);
+      const chaveSelecao = `${id}:${provedor || ''}`;
 
-      setImagens(
-        fotos ? { ...fotos, ...(marcacoes || {}) } : null
-      );
+      if (provedor && selecaoInicialAplicada.current !== chaveSelecao) {
+        const inicial = relatoriosRecebidos.find(item => item.provedor === provedor);
 
-      setRelatorios(r.relatorios || []);
+        if (inicial) {
+          selecaoInicialAplicada.current = chaveSelecao;
+          setSelecionado(inicial.provedor);
+          setVerOriginal(false);
+          setDescricao(inicial.conteudo_editavel?.conteudo_descricao || '');
+        }
+      }
 
-      if (c.comparacoes?.length) {
+      const primeiraComparacao = respostaComparacoes.comparacoes?.[0];
+
+      if (primeiraComparacao) {
         const detalhes = await apiJson<Comparacao>(
-          `/analises/${id}/comparacoes/${c.comparacoes[0].id_comparacao}`
+          `/analises/${id}/comparacoes/${primeiraComparacao.id_comparacao}`,
         );
-
         setComparacoes([detalhes]);
       } else {
         setComparacoes([]);
       }
     } catch (e) {
-      setErro(
-        e instanceof Error
-          ? e.message
-          : 'Falha ao carregar relatórios.'
-      );
+      setErro(e instanceof Error ? e.message : 'Falha ao carregar relatórios.');
     } finally {
       setCarregando(false);
     }
-  }, [id, pacienteId]);
+  }, [id, pacienteId, provedor]);
 
   useFocusEffect(
     useCallback(() => {
       void carregar();
-    }, [carregar])
+    }, [carregar]),
   );
 
   const atualizarFotografias = async () => {
@@ -156,27 +152,18 @@ export default function DetalheAvaliacaoScreen() {
     try {
       const [fotos, marcacoes] = await Promise.all([
         apiJson<ImagensAvaliacao>(
-          `/pacientes/${pacienteId}/analises/${id}/imagens`
+          `/pacientes/${pacienteId}/analises/${id}/imagens`,
         ),
-
-        apiJson<{
-          marcacoes_por_ia:
-            ImagensAvaliacao['marcacoes_por_ia'];
-        }>(
-          `/pacientes/${pacienteId}/analises/${id}/marcacoes`
+        apiJson<RespostaMarcacoes>(
+          `/pacientes/${pacienteId}/analises/${id}/marcacoes`,
         ).catch(() => null),
       ]);
 
-      setImagens({
-        ...fotos,
-        ...(marcacoes || {}),
-      });
+      setImagens({ ...fotos, ...(marcacoes || {}) });
     } catch (e) {
       Aviso.alert(
         'Fotografias',
-        e instanceof Error
-          ? e.message
-          : 'Não foi possível atualizar as imagens.'
+        e instanceof Error ? e.message : 'Não foi possível atualizar as imagens.',
       );
     }
   };
@@ -187,23 +174,16 @@ export default function DetalheAvaliacaoScreen() {
     setGerandoMarcacoes(true);
 
     try {
-      const dados = await apiJson<{
-        marcacoes_por_ia:
-          ImagensAvaliacao['marcacoes_por_ia'];
-      }>(
+      const dados = await apiJson<RespostaMarcacoes>(
         `/pacientes/${pacienteId}/analises/${id}/marcacoes/gerar`,
-        { method: 'POST' }
+        { method: 'POST' },
       );
 
-      setImagens(anterior =>
-        anterior ? { ...anterior, ...dados } : anterior
-      );
-    } catch (erro) {
+      setImagens(anterior => anterior ? { ...anterior, ...dados } : anterior);
+    } catch (e) {
       Aviso.alert(
         'Marcações',
-        erro instanceof Error
-          ? erro.message
-          : 'Não foi possível gerar as imagens.'
+        e instanceof Error ? e.message : 'Não foi possível gerar as imagens.',
       );
     } finally {
       setGerandoMarcacoes(false);
@@ -221,180 +201,116 @@ export default function DetalheAvaliacaoScreen() {
         mensagem: string;
       }>(
         `/pacientes/${pacienteId}/analises/${id}/marcacoes/openai/reprocessar`,
-        { method: 'POST' }
+        { method: 'POST' },
       );
 
       if (resposta.total_regioes > 0) {
-        const imagensMarcadas = await apiJson<{
-          marcacoes_por_ia:
-            ImagensAvaliacao['marcacoes_por_ia'];
-        }>(
+        const imagensMarcadas = await apiJson<RespostaMarcacoes>(
           `/pacientes/${pacienteId}/analises/${id}/marcacoes/gerar`,
-          { method: 'POST' }
+          { method: 'POST' },
         );
 
         setImagens(anterior =>
-          anterior
-            ? { ...anterior, ...imagensMarcadas }
-            : anterior
+          anterior ? { ...anterior, ...imagensMarcadas } : anterior,
         );
 
         await atualizarFotografias();
 
         Aviso.alert(
           'OpenAI — proposta complementar',
-          `${resposta.total_regioes} região(ões) proposta(s). Confira os contornos e reabra o relatório para importá-los no editor. O T.I.M.E.S. original foi preservado.`
+          `${resposta.total_regioes} região(ões) proposta(s). Confira os contornos e reabra o relatório para importá-los no editor. O T.I.M.E.S. original foi preservado.`,
         );
       } else {
         await atualizarFotografias();
-
-        Aviso.alert(
-          'Sem coordenadas',
-          resposta.mensagem
-        );
+        Aviso.alert('Sem coordenadas', resposta.mensagem);
       }
-    } catch (erro) {
+    } catch (e) {
       Aviso.alert(
         'OpenAI',
-        erro instanceof Error
-          ? erro.message
-          : 'Falha ao tentar obter contornos.'
+        e instanceof Error ? e.message : 'Falha ao tentar obter contornos.',
       );
     } finally {
       setReprocessandoOpenAI(false);
     }
   };
 
-  const selecionar = (r: Relatorio) => {
-    setSelecionado(r.provedor);
+  const selecionar = (relatorio: Relatorio) => {
+    setSelecionado(relatorio.provedor);
     setVerOriginal(false);
-    setDescricao(
-      r.conteudo_editavel?.conteudo_descricao || ''
-    );
+    setDescricao(relatorio.conteudo_editavel?.conteudo_descricao || '');
   };
 
-  const relatorioAtual = relatorios.find(
-    r => r.provedor === selecionado
-  );
+  const relatorioAtual = relatorios.find(relatorio => relatorio.provedor === selecionado);
 
   const salvar = async () => {
-    if (
-      !relatorioAtual ||
-      !descricao.trim() ||
-      relatorioAtual.status === 'aprovado'
-    ) {
+    if (!relatorioAtual || !descricao.trim() || relatorioAtual.status === 'aprovado') {
       return;
     }
 
     setSalvando(true);
 
     try {
-      await apiJson(
-        `/analises/${id}/relatorios/${selecionado}`,
-        {
-          method: 'PATCH',
-          body: JSON.stringify({
-            campo: 'conteudo_descricao',
-            novo_valor: descricao.trim(),
-          }),
-        }
-      );
+      await apiJson(`/analises/${id}/relatorios/${selecionado}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          campo: 'conteudo_descricao',
+          novo_valor: descricao.trim(),
+        }),
+      });
 
       await carregar();
-
-      Aviso.alert(
-        'Salvo',
-        'Revisão salva com sucesso.'
-      );
+      Aviso.alert('Salvo', 'Revisão salva com sucesso.');
     } catch (e) {
-      Aviso.alert(
-        'Erro',
-        e instanceof Error
-          ? e.message
-          : 'Falha ao salvar.'
-      );
+      Aviso.alert('Erro', e instanceof Error ? e.message : 'Falha ao salvar.');
     } finally {
       setSalvando(false);
     }
   };
 
   const aprovar = () => {
-    if (
-      !relatorioAtual ||
-      relatorioAtual.status === 'aprovado'
-    ) {
-      return;
-    }
+    if (!relatorioAtual || relatorioAtual.status === 'aprovado') return;
 
     Aviso.alert(
       'Confirmar aprovação',
       'Você revisou o relatório e deseja aprová-lo como profissional responsável?',
       [
-        {
-          text: 'Cancelar',
-          style: 'cancel',
-        },
+        { text: 'Cancelar', style: 'cancel' },
         {
           text: 'Aprovar',
           onPress: async () => {
             setSalvando(true);
 
             try {
-              await apiJson(
-                `/analises/${id}/relatorios/${selecionado}/aprovar`,
-                { method: 'POST' }
-              );
+              await apiJson(`/analises/${id}/relatorios/${selecionado}/aprovar`, {
+                method: 'POST',
+              });
 
               await carregar();
-
-              Aviso.alert(
-                'Aprovado',
-                'Relatório aprovado com sucesso.'
-              );
+              Aviso.alert('Aprovado', 'Relatório aprovado com sucesso.');
             } catch (e) {
-              Aviso.alert(
-                'Erro',
-                e instanceof Error
-                  ? e.message
-                  : 'Falha ao aprovar.'
-              );
+              Aviso.alert('Erro', e instanceof Error ? e.message : 'Falha ao aprovar.');
             } finally {
               setSalvando(false);
             }
           },
         },
-      ]
+      ],
     );
   };
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.titulo}>
-        Avaliação #{id}
-      </Text>
+      <Text style={styles.titulo}>Avaliação #{id}</Text>
 
       {pacienteId ? (
-        <Text style={styles.menor}>
-          Prontuário nº {pacienteId}
-        </Text>
+        <Text style={styles.menor}>Prontuário nº {pacienteId}</Text>
       ) : null}
 
-      {carregando ? (
-        <ActivityIndicator
-          color="#0056b3"
-          size="large"
-        />
-      ) : null}
+      {carregando ? <ActivityIndicator color="#0056b3" size="large" /> : null}
+      {erro ? <Text style={styles.erro}>{erro}</Text> : null}
 
-      {erro ? (
-        <Text style={styles.erro}>{erro}</Text>
-      ) : null}
-
-      {/* ETAPA 2J — RELATÓRIOS SALVOS */}
       {!carregando && relatorios.length > 0 ? (
-        <ComparacaoConfiancaIA
-          relatorios={relatorios}
-        />
+        <ComparacaoConfiancaIA relatorios={relatorios} />
       ) : null}
 
       {imagens ? (
@@ -403,14 +319,10 @@ export default function DetalheAvaliacaoScreen() {
             relatorios.map(relatorio => [
               relatorio.provedor.toLowerCase(),
               (
-                (
-                  relatorio.conteudo_original ??
-                  relatorio.conteudo_editavel
-                )?.marcacoes_imagem?.limitacoes ?? []
-              ).filter(aviso =>
-                aviso.startsWith('[AUDITORIA_CONTORNO]')
-              ),
-            ])
+                (relatorio.conteudo_original ?? relatorio.conteudo_editavel)
+                  ?.marcacoes_imagem?.limitacoes ?? []
+              ).filter(aviso => aviso.startsWith('[AUDITORIA_CONTORNO]')),
+            ]),
           )}
           imagens={imagens}
           onAtualizar={atualizarFotografias}
@@ -422,55 +334,37 @@ export default function DetalheAvaliacaoScreen() {
       ) : null}
 
       {pacienteId && id ? (
-        <EditorMarcacoes
-          pacienteId={pacienteId}
-          analiseId={id}
-        />
+        <EditorMarcacoes pacienteId={pacienteId} analiseId={id} />
       ) : null}
 
-      <Text style={styles.secao}>
-        Relatórios das IAs
-      </Text>
+      <Text style={styles.secao}>Relatórios das IAs</Text>
 
       {!carregando && !relatorios.length ? (
-        <Text style={styles.menor}>
-          Nenhum relatório salvo nesta avaliação.
-        </Text>
+        <Text style={styles.menor}>Nenhum relatório salvo nesta avaliação.</Text>
       ) : null}
 
-      {relatorios.map(r => (
+      {relatorios.map(relatorio => (
         <TouchableOpacity
-          key={r.provedor}
-          style={[
-            styles.card,
-            selecionado === r.provedor &&
-              styles.ativo,
-          ]}
-          onPress={() => selecionar(r)}
+          key={relatorio.provedor}
+          style={[styles.card, selecionado === relatorio.provedor && styles.ativo]}
+          onPress={() => selecionar(relatorio)}
         >
-          <Text style={styles.subtitulo}>
-            {r.provedor.toUpperCase()}
-          </Text>
-
+          <Text style={styles.subtitulo}>{relatorio.provedor.toUpperCase()}</Text>
           <Text style={styles.menor}>
-            {r.status === 'aprovado'
+            {relatorio.status === 'aprovado'
               ? 'Aprovado'
-              : r.status === 'em_edicao'
+              : relatorio.status === 'em_edicao'
                 ? 'Em edição'
                 : 'Aguardando revisão profissional'}
           </Text>
-
-          <Text style={styles.menor}>
-            Toque para visualizar e revisar
-          </Text>
+          <Text style={styles.menor}>Toque para visualizar e revisar</Text>
         </TouchableOpacity>
       ))}
 
       {relatorioAtual ? (
         <View style={styles.card}>
           <Text style={styles.subtitulo}>
-            Descrição —{' '}
-            {relatorioAtual.provedor.toUpperCase()}
+            Descrição — {relatorioAtual.provedor.toUpperCase()}
           </Text>
 
           <TextInput
@@ -479,17 +373,8 @@ export default function DetalheAvaliacaoScreen() {
             textAlignVertical="top"
             value={descricao}
             onChangeText={setDescricao}
-            editable={
-              relatorioAtual.status !== 'aprovado' &&
-              !salvando
-            }
+            editable={relatorioAtual.status !== 'aprovado' && !salvando}
           />
-
-          <Text style={styles.menor}>
-            O relatório completo permanece disponível
-            abaixo em seções expansíveis,
-            sem exclusão de informações.
-          </Text>
 
           <RelatorioCompleto
             resposta={relatorioAtual.conteudo_editavel}
@@ -498,22 +383,14 @@ export default function DetalheAvaliacaoScreen() {
 
           {relatorioAtual.alertas_validacao?.length ? (
             <View style={styles.item}>
-              <Text style={styles.subtitulo}>
-                Alertas de validação técnica
-              </Text>
+              <Text style={styles.subtitulo}>Alertas de validação técnica</Text>
 
-              {relatorioAtual.alertas_validacao.map(
-                (a, i) => (
-                  <Text
-                    key={i}
-                    style={styles.menor}
-                  >
-                    • {a.codigo || 'Alerta'} (
-                    {a.severidade || 'revisão'}):{' '}
-                    {a.mensagem || 'Sem descrição'}
-                  </Text>
-                )
-              )}
+              {relatorioAtual.alertas_validacao.map((alerta, indice) => (
+                <Text key={indice} style={styles.menor}>
+                  • {alerta.codigo || 'Alerta'} ({alerta.severidade || 'revisão'}):{' '}
+                  {alerta.mensagem || 'Sem descrição'}
+                </Text>
+              ))}
             </View>
           ) : null}
 
@@ -521,113 +398,77 @@ export default function DetalheAvaliacaoScreen() {
             <>
               <TouchableOpacity
                 style={styles.item}
-                onPress={() =>
-                  setVerOriginal(!verOriginal)
-                }
+                onPress={() => setVerOriginal(anterior => !anterior)}
                 accessibilityRole="button"
               >
                 <Text style={styles.subtitulo}>
-                  {verOriginal
-                    ? '▾ Ocultar'
-                    : '▸ Consultar'}{' '}
-                  relatório original da IA (sem edições)
+                  {verOriginal ? '▾ Ocultar' : '▸ Consultar'} relatório original da IA
                 </Text>
               </TouchableOpacity>
 
               {verOriginal ? (
-                <RelatorioCompleto
-                  resposta={
-                    relatorioAtual.conteudo_original
-                  }
-                />
+                <RelatorioCompleto resposta={relatorioAtual.conteudo_original} />
               ) : null}
             </>
           ) : null}
 
           {relatorioAtual.status === 'aprovado' ? (
-            <Text style={styles.aprovado}>
-              Relatório aprovado. Edição bloqueada.
-            </Text>
+            <>
+              <Text style={styles.aprovado}>Relatório aprovado. Edição bloqueada.</Text>
+
+              {id && pacienteId ? (
+                <BotaoRelatorioPdf
+                  analiseId={id}
+                  pacienteId={pacienteId}
+                  provedor={relatorioAtual.provedor}
+                  aprovadoEm={relatorioAtual.data_aprovacao}
+                  relatorio={relatorioAtual.conteudo_editavel}
+                />
+              ) : null}
+            </>
           ) : (
             <>
-              <TouchableOpacity
-                style={styles.botao}
-                onPress={salvar}
-                disabled={salvando}
-              >
-                <Text style={styles.botaoTexto}>
-                  Salvar revisão
-                </Text>
+              <TouchableOpacity style={styles.botao} onPress={salvar} disabled={salvando}>
+                <Text style={styles.botaoTexto}>Salvar revisão</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity
-                style={styles.botao}
-                onPress={aprovar}
-                disabled={salvando}
-              >
-                <Text style={styles.botaoTexto}>
-                  Aprovar relatório
-                </Text>
+              <TouchableOpacity style={styles.botao} onPress={aprovar} disabled={salvando}>
+                <Text style={styles.botaoTexto}>Aprovar relatório</Text>
               </TouchableOpacity>
             </>
           )}
 
           <Text style={styles.menor}>
-            Aprovação é decisão do profissional;
-            o texto da IA pode conter erros.
+            O profissional é responsável pela aprovação. O texto da IA pode conter erros.
           </Text>
         </View>
       ) : null}
 
-      <Text style={styles.secao}>
-        Comparação T.I.M.E.S.
-      </Text>
+      <Text style={styles.secao}>Comparação T.I.M.E.S.</Text>
 
       {!carregando && !comparacoes.length ? (
-        <Text style={styles.menor}>
-          Nenhuma comparação disponível
-          nesta avaliação.
-        </Text>
+        <Text style={styles.menor}>Nenhuma comparação disponível nesta avaliação.</Text>
       ) : null}
 
-      {comparacoes.map(c => (
-        <View
-          key={c.id_comparacao}
-          style={styles.card}
-        >
-          {Object.entries(
-            c.comparacao_multimodal?.componentes || {}
-          ).map(([letra, item]) => (
-            <View
-              key={letra}
-              style={styles.item}
-            >
-              <Text style={styles.subtitulo}>
-                {letra} — {item.nome || ''}
-              </Text>
-
-              <Text style={styles.menor}>
-                Situação descritiva:{' '}
-                {item.situacao_descritiva ||
-                  'Inconclusiva'}
-              </Text>
-
-              <Text style={styles.menor}>
-                Diferença no estado de avaliação:{' '}
-                {item.divergencia_status
-                  ? 'Sim'
-                  : 'Não'}
-              </Text>
-
-              <Text style={styles.menor}>
-                {item.observacao_descritiva || ''}
-              </Text>
-            </View>
-          ))}
+      {comparacoes.map(comparacao => (
+        <View key={comparacao.id_comparacao} style={styles.card}>
+          {Object.entries(comparacao.comparacao_multimodal?.componentes || {}).map(
+            ([letra, item]) => (
+              <View key={letra} style={styles.item}>
+                <Text style={styles.subtitulo}>{letra} — {item.nome || ''}</Text>
+                <Text style={styles.menor}>
+                  Situação descritiva: {item.situacao_descritiva || 'Inconclusiva'}
+                </Text>
+                <Text style={styles.menor}>
+                  Diferença no estado de avaliação: {item.divergencia_status ? 'Sim' : 'Não'}
+                </Text>
+                <Text style={styles.menor}>{item.observacao_descritiva || ''}</Text>
+              </View>
+            ),
+          )}
 
           <Text style={styles.menor}>
-            {c.comparacao_multimodal
-              ?.observacao_metodologica || ''}
+            {comparacao.comparacao_multimodal?.observacao_metodologica || ''}
           </Text>
         </View>
       ))}

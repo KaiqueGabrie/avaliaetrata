@@ -1,8 +1,9 @@
-import { useCallback, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
 import {
-  ActivityIndicator, Image, ScrollView, StyleSheet, Text, TouchableOpacity,
-  useWindowDimensions, View,
+  ActivityIndicator, Image,
+  StyleSheet, Text, TouchableOpacity,
+  useWindowDimensions, View
 } from 'react-native';
 import { API_URL } from '../config/api';
 import { apiJson, obterToken } from '../config/cliente';
@@ -94,6 +95,7 @@ export default function EditorMarcacoes({ pacienteId, analiseId }: {
   const [aberto, setAberto] = useState(false);
   const [carregando, setCarregando] = useState(false);
   const [salvando, setSalvando] = useState(false);
+  const [atualizandoPropostas, setAtualizandoPropostas] = useState(false);
   const [dados, setDados] = useState<DadosEditor | null>(null);
   const [regioes, setRegioes] = useState<Regiao[]>([]);
   const [provedor, setProvedor] = useState<Provedor>('gemini');
@@ -133,6 +135,24 @@ export default function EditorMarcacoes({ pacienteId, analiseId }: {
   useFocusEffect(useCallback(() => { void carregar(); }, [carregar]));
   const largura = Math.max(200, Math.min(560, larguraJanela - 65, 620 * tamanho.largura / tamanho.altura));
   const altura = largura * tamanho.altura / tamanho.largura;
+
+  const atualizarPropostas = async () => {
+    setAtualizandoPropostas(true);
+    try {
+      const recebido = await apiJson<DadosEditor>(caminho);
+      setDados(atual => atual ? {
+        ...atual,
+        regioes_propostas_ia: recebido.regioes_propostas_ia,
+      } : atual);
+    } catch (e) {
+      Aviso.alert(
+        'Falha ao atualizar propostas',
+        e instanceof Error ? e.message : 'Tente novamente.',
+      );
+    } finally {
+      setAtualizandoPropostas(false);
+    }
+  };
 
   const importar = () => {
     if (bloqueado || !dados) return;
@@ -305,7 +325,18 @@ export default function EditorMarcacoes({ pacienteId, analiseId }: {
         <Text style={styles.subtitulo}>Relatório de referência</Text>
         <View style={styles.linha}>{PROVEDORES.map(p => <Botao key={p.id} texto={p.nome} ativo={provedor === p.id}
           desabilitado={bloqueado} onPress={() => { setProvedor(p.id); setAlterado(true); }} />)}</View>
-        {!bloqueado ? <Botao texto="Carregar polígonos propostos pela IA selecionada" onPress={importar} /> : null}
+        {!bloqueado ? <View style={styles.linha}>
+          <Botao
+            texto={atualizandoPropostas ? 'Atualizando propostas...' : 'Atualizar propostas das IAs'}
+            onPress={() => void atualizarPropostas()}
+            desabilitado={atualizandoPropostas || carregando || salvando}
+          />
+          <Botao
+            texto="Carregar polígonos propostos pela IA selecionada"
+            onPress={importar}
+            desabilitado={atualizandoPropostas || carregando || salvando}
+          />
+        </View> : null}
         <Text style={styles.subtitulo}>Ferramentas de edição</Text>
         <View style={styles.linha}>
           <Botao texto="Desenhar novo polígono" ativo={modo === 'desenhar'} desabilitado={bloqueado}
@@ -408,3 +439,4 @@ const styles = StyleSheet.create({
   erro: { color: '#b91c1c', fontSize: 13, marginBottom: 10 },
   aprovado: { color: '#15803d', fontWeight: 'bold', marginTop: 10 },
 });
+

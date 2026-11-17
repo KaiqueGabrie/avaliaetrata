@@ -1,5 +1,6 @@
+import RotuloComAjuda from '../../components/rotulo-com-ajuda';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -14,17 +15,20 @@ import {
 
 import { File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
-import { useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { fetch as expoFetch } from 'expo/fetch';
 import { apiJson, mensagemErro, obterToken } from '../../config/cliente';
 
 import ComparacaoConfiancaIA from '../../components/comparacao-confianca-ia';
 import EditorMarcacoes from '../../components/editor-marcacoes';
-import FotografiasAvaliacao, { ImagensAvaliacao } from '../../components/fotografias-avaliacao';
+import type { ImagensAvaliacao } from '../../components/fotografias-avaliacao';
+import FotografiasAvaliacao from '../../components/fotografias-avaliacao';
 import RelatorioCompleto from '../../components/relatorio-completo';
 import { API_URL } from '../../config/api';
 import type { ResultadoProvedorIA } from '../../types/ia';
 import { Aviso } from '../../utils/avisos';
+
+type Etapa = 'clinica' | 'foto' | 'processando' | 'resultados' | 'revisao';
 
 type Provedor = 'gemini' | 'openai' | 'kimi' | 'todos';
 
@@ -77,7 +81,7 @@ function Campo({
 }) {
   return (
     <View style={styles.grupo}>
-      <Text style={styles.rotulo}>{titulo}</Text>
+      <RotuloComAjuda titulo={titulo} />
       <TextInput
         style={[styles.input, multiline && styles.multiline]}
         value={valor}
@@ -95,6 +99,10 @@ export default function NovaAvaliacaoScreen() {
     pacienteId?: string;
   }>();
 
+  const solicitacaoEmAndamento = useRef(false);
+  const [etapa, setEtapa] = useState<Etapa>('clinica');
+  const [comparacaoAberta, setComparacaoAberta] = useState(false);
+  const [avaliacaoIniciada, setAvaliacaoIniciada] = useState<number | null>(null);
   const [localizacao, setLocalizacao] = useState('');
   const [comprimento, setComprimento] = useState('');
   const [largura, setLargura] = useState('');
@@ -121,6 +129,7 @@ export default function NovaAvaliacaoScreen() {
   const resultados = resultado?.analise_multimodal?.resultados || {};
 
   const limpar = () => {
+    setComparacaoAberta(false);
     setResultado(null);
     setProvedorEscolhido('');
     setRevisao('');
@@ -174,6 +183,8 @@ export default function NovaAvaliacaoScreen() {
   };
 
   const analisar = async () => {
+    if (solicitacaoEmAndamento.current || avaliacaoIniciada !== null) return;
+
     if (!pacienteId || !/^\d+$/.test(pacienteId)) {
       Aviso.alert(
         'Paciente obrigatório',
@@ -202,7 +213,9 @@ export default function NovaAvaliacaoScreen() {
       return;
     }
 
+    solicitacaoEmAndamento.current = true;
     setCarregando(true);
+    setEtapa('processando');
     limpar();
     let analiseId: number | null = null;
 
@@ -232,6 +245,7 @@ export default function NovaAvaliacaoScreen() {
       );
 
       analiseId = criada.id_analise;
+      setAvaliacaoIniciada(analiseId);
 
       // 2. Envia a foto; o backend executa OpenCV e vincula a imagem.
       setStatusApi('2/3 — Registrando fotografia...');
@@ -389,21 +403,25 @@ export default function NovaAvaliacaoScreen() {
 
       setStatusApi(
         sucessos > 0
-          ? `${sucessos} de ${lista.length} análises concluídas. Confira os resultados abaixo.`
+          ? `${sucessos} de ${lista.length} análises concluídas.`
           : 'Não foi possível concluir a análise. Você pode consultar a avaliação no prontuário.'
       );
-    } catch (erro) {
+      setEtapa('resultados');
+    } catch {
       setStatusApi(
         analiseId
           ? 'Não foi possível concluir a análise. Consulte o prontuário antes de tentar novamente.'
           : 'Erro ao criar avaliação.'
       );
 
+      setEtapa(analiseId !== null ? 'resultados' : 'foto');
+
       Aviso.alert(
         'Não foi possível concluir',
         'Confira sua conexão e os dados informados. Se o problema continuar, tente novamente mais tarde.'
       );
     } finally {
+      solicitacaoEmAndamento.current = false;
       setCarregando(false);
     }
   };
@@ -554,199 +572,355 @@ export default function NovaAvaliacaoScreen() {
   };
 
   const selecionarProvedor = (nome: string) => {
-    setProvedorEscolhido(nome);
-    setValidado(false);
+    if (nome !== provedorEscolhido) {
+      setProvedorEscolhido(nome);
+      setValidado(false);
+      setRevisao(resultados[nome]?.resposta?.conteudo_descricao || '');
+    }
+    setEtapa('revisao');
+  };
 
-    setRevisao(
-      resultados[nome]?.resposta?.conteudo_descricao || ''
-    );
+  const avancarParaFoto = () => {
+    if (!localizacao.trim()) {
+      Aviso.alert('Localização obrigatória', 'Informe a localização anatômica da lesão.');
+      return;
+    }
+    if (nivelDor.trim() && !(Number(nivelDor) >= 0 && Number(nivelDor) <= 10)) {
+      Aviso.alert('Dor inválida', 'Informe um valor entre 0 e 10.');
+      return;
+    }
+    setStatusApi('');
+    setEtapa('foto');
+  };
+
+  const abrirRelatorio = () => {
+    if (!avaliacaoIniciada || !pacienteId) return;
+    router.push({
+      pathname: '/avaliacao/[id]',
+      params: {
+        id: String(avaliacaoIniciada),
+        pacienteId,
+        provedor: provedorEscolhido,
+      },
+    });
+  };
+
+  const tituloDaEtapa: Record<Etapa, string> = {
+    clinica: 'Informações Clínicas',
+    foto: 'Fotografia',
+    processando: 'Analisando a fotografia',
+    resultados: 'Resultado das Análises',
+    revisao: 'Resultado da Análise',
+  };
+
+  const nomesModelos: Record<string, string> = {
+    gemini: 'Gemini',
+    openai: 'OpenAI',
+    kimi: 'Kimi',
+  };
+  const respostaEscolhida = resultados[provedorEscolhido]?.resposta;
+  const cardFoto = (modelo: string) => {
+    const marcada = resultado?.marcacoes_por_ia?.[modelo.toLowerCase()];
+    const urlMarcada = marcada?.status === 'pronta' ? marcada.url : null;
+    const url = urlMarcada || resultado?.imagem_original_url || imagemUri;
+    const uri = url?.startsWith('/') ? API_URL + url : url;
+
+    return uri ? (
+      <View>
+        <Image
+          source={{ uri }}
+          style={styles.miniatura}
+          resizeMode="contain"
+          accessibilityLabel={urlMarcada ? 'Fotografia com contornos propostos' : 'Fotografia original'}
+        />
+        <Text style={styles.textoMenor}>
+          {urlMarcada ? 'Proposta de marcação da IA' : 'Fotografia original'}
+        </Text>
+      </View>
+    ) : null;
   };
 
   return (
     <ScrollView
+      key={etapa}
+      style={styles.pagina}
       contentContainerStyle={styles.container}
       keyboardShouldPersistTaps="handled"
     >
-      <Text style={styles.titulo}>Nova avaliação</Text>
-      <Text style={styles.textoMenor}>
-        Prontuário nº {pacienteId || 'Não selecionado'}
-      </Text>
+      <Text style={styles.titulo}>{tituloDaEtapa[etapa]}</Text>
+      <Text style={styles.textoMenor}>Prontuário nº {pacienteId || 'Não selecionado'}</Text>
 
-      {statusApi ? (
+      {etapa === 'clinica' ? (
+        <>
+          <Campo
+            titulo="Localização anatômica *"
+            valor={localizacao}
+            alterar={setLocalizacao}
+          />
+          <Campo
+            titulo="Comprimento (cm)"
+            valor={comprimento}
+            alterar={setComprimento}
+          />
+          <Campo
+            titulo="Largura (cm)"
+            valor={largura}
+            alterar={setLargura}
+          />
+          <Campo
+            titulo="Tipo de exsudato"
+            valor={tipoExsudato}
+            alterar={setTipoExsudato}
+          />
+
+          <RotuloComAjuda titulo="Odor informado pelo profissional" />
+
+          <View style={styles.linha}>
+            {[
+              { valor: '', titulo: 'Não avaliado' },
+              { valor: 'sim', titulo: 'Presente' },
+              { valor: 'nao', titulo: 'Ausente' },
+            ].map(opcao => (
+              <TouchableOpacity
+                key={opcao.titulo}
+                style={[
+                  styles.opcao,
+                  odor === opcao.valor && styles.opcaoAtiva,
+                ]}
+                onPress={() =>
+                  setOdor(opcao.valor as 'sim' | 'nao' | '')
+                }
+              >
+                <Text style={styles.textoMenor}>
+                  {opcao.titulo}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Campo
+            titulo="Nível de dor (0 a 10)"
+            valor={nivelDor}
+            alterar={setNivelDor}
+          />
+          <Campo
+            titulo="Queixa principal"
+            valor={queixaPrincipal}
+            alterar={setQueixaPrincipal}
+            multiline
+          />
+          <Campo
+            titulo="Observações clínicas"
+            valor={observacoes}
+            alterar={setObservacoes}
+            multiline
+          />
+
+          <View style={styles.aviso}>
+            <Text style={styles.texto}>
+              Se for medir a área depois, fotografe uma régua no mesmo plano da lesão.
+            </Text>
+          </View>
+          <TouchableOpacity accessibilityRole="button" style={styles.botao} onPress={avancarParaFoto}>
+            <Text style={styles.botaoTexto}>Avançar</Text>
+          </TouchableOpacity>
+        </>
+      ) : null}
+
+      {etapa === 'foto' ? (
+        <>
+          <TouchableOpacity accessibilityRole="button" onPress={() => setEtapa('clinica')}>
+            <Text style={styles.link}>Voltar às informações clínicas</Text>
+          </TouchableOpacity>
+          <Text style={styles.texto}>Centralize a lesão e confira a iluminação da fotografia.</Text>
+          {imagemUri ? (
+            <Image
+              source={{ uri: imagemUri }}
+              style={styles.imagem}
+              resizeMode="contain"
+              accessibilityLabel="Fotografia selecionada"
+            />
+          ) : null}
+
+          {Platform.OS !== 'web' ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              style={styles.botaoCinza}
+              onPress={() => selecionarImagem(true)}
+            >
+              <Text style={styles.botaoTexto}>Tirar fotografia</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          <RotuloComAjuda titulo="Como fotografar" />
+          <TouchableOpacity
+            accessibilityRole="button"
+            style={styles.botaoCinza}
+            onPress={() => selecionarImagem(false)}
+          >
+            <Text style={styles.botaoTexto}>Selecionar da galeria</Text>
+          </TouchableOpacity>
+
+          <Text style={styles.subtitulo}>Modelos da análise</Text>
+          {PROVEDORES.map(item => (
+            <TouchableOpacity
+              key={item.valor}
+              style={[
+                styles.opcao,
+                provedor === item.valor && styles.opcaoAtiva,
+              ]}
+              onPress={() => setProvedor(item.valor)}
+              disabled={carregando}
+            >
+              <Text style={styles.texto}>
+                {item.titulo}
+              </Text>
+            </TouchableOpacity>
+          ))}
+
+          {statusApi ? <Text style={styles.status}>{statusApi}</Text> : null}
+          <TouchableOpacity
+            accessibilityRole="button"
+            style={[styles.botao, !imagemUri && styles.desabilitado]}
+            onPress={analisar}
+            disabled={!imagemUri || carregando}
+          >
+            <Text style={styles.botaoTexto}>Analisar fotografia</Text>
+          </TouchableOpacity>
+        </>
+      ) : null}
+
+      {etapa === 'processando' ? (
+        <View style={styles.processando} accessibilityLiveRegion="polite">
+          <ActivityIndicator size="large" color="#005088" />
+          <Text style={styles.subtitulo}>{statusApi || 'Preparando a avaliação…'}</Text>
+        </View>
+      ) : null}
+
+      {etapa === 'resultados' || etapa === 'revisao' ? (
         <Text style={styles.status}>{statusApi}</Text>
       ) : null}
 
-      <Text style={styles.titulo}>1. Dados clínicos</Text>
+      {etapa === 'resultados' ? (
+        <>
+          {avaliacaoIniciada ? <Text style={styles.textoMenor}>Avaliação nº {avaliacaoIniciada}</Text> : null}
+          {Object.keys(resultados).length === 0 ? (
+            <Text style={styles.texto}>Nenhuma análise disponível nesta tela.</Text>
+          ) : null}
+          {Object.entries(resultados).map(([modelo, item]) => {
+            const nome = nomesModelos[modelo.toLowerCase()] || modelo.toUpperCase();
+            const confianca = item.resposta?.confianca_avaliacao_percentual;
+            return (
+              <View key={modelo} style={styles.card}>
+                <Text style={styles.subtitulo}>{nome}</Text>
+                {item.sucesso && item.resposta ? (
+                  <>
+                    <Text style={styles.textoMenor}>
+                      Confiança autodeclarada: {typeof confianca === 'number' && Number.isFinite(confianca)
+                        ? `${confianca.toLocaleString('pt-BR')}%`
+                        : 'Não informada'}
+                    </Text>
+                    {cardFoto(modelo)}
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      style={styles.botao}
+                      onPress={() => selecionarProvedor(modelo)}
+                    >
+                      <Text style={styles.botaoTexto}>Selecionar para revisão</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : <Text style={styles.erro}>Análise indisponível.</Text>}
+              </View>
+            );
+          })}
+          {resultado ? (
+            <>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityState={{ expanded: comparacaoAberta }}
+                onPress={() => setComparacaoAberta(valor => !valor)}
+              >
+                <Text style={styles.link}>{comparacaoAberta ? 'Ocultar comparação' : 'Comparar análises, confiança e marcações'}</Text>
+              </TouchableOpacity>
+              {comparacaoAberta ? (
+                <>
+                  <ComparacaoConfiancaIA
+                    resultados={resultados}
+                  />
 
-      <Campo
-        titulo="Localização anatômica *"
-        valor={localizacao}
-        alterar={setLocalizacao}
-      />
-      <Campo
-        titulo="Comprimento (cm)"
-        valor={comprimento}
-        alterar={setComprimento}
-      />
-      <Campo
-        titulo="Largura (cm)"
-        valor={largura}
-        alterar={setLargura}
-      />
-      <Campo
-        titulo="Tipo de exsudato"
-        valor={tipoExsudato}
-        alterar={setTipoExsudato}
-      />
+                  <FotografiasAvaliacao
+                    alertasContornos={Object.fromEntries(
+                      Object.entries(resultados).map(([nome, item]) => [
+                        nome.toLowerCase(),
+                        (
+                          item.resposta?.marcacoes_imagem?.limitacoes ?? []
+                        ).filter(aviso =>
+                          aviso.startsWith('[AUDITORIA_CONTORNO]')
+                        ),
+                      ])
+                    )}
+                    imagens={resultado}
+                    onAtualizar={atualizarFotografias}
+                    onGerar={gerarMarcacoes}
+                    gerando={gerandoMarcacoes}
+                    onReprocessarOpenAI={reprocessarOpenAI}
+                    reprocessandoOpenAI={reprocessandoOpenAI}
+                  />
 
-      <Text style={styles.rotulo}>
-        Odor informado pelo profissional
-      </Text>
+                  {resultado.comparacao_multimodal?.componentes ? (
+                    <View style={styles.card}>
+                      <Text style={styles.subtitulo}>
+                        Comparação das análises T.I.M.E.S.
+                      </Text>
 
-      <View style={styles.linha}>
-        {[
-          { valor: '', titulo: 'Não avaliado' },
-          { valor: 'sim', titulo: 'Presente' },
-          { valor: 'nao', titulo: 'Ausente' },
-        ].map(opcao => (
-          <TouchableOpacity
-            key={opcao.titulo}
-            style={[
-              styles.opcao,
-              odor === opcao.valor && styles.opcaoAtiva,
-            ]}
-            onPress={() =>
-              setOdor(opcao.valor as 'sim' | 'nao' | '')
-            }
-          >
-            <Text style={styles.textoMenor}>
-              {opcao.titulo}
-            </Text>
+                      {Object.entries(
+                        resultado.comparacao_multimodal.componentes
+                      ).map(([letra, componente]) => (
+                        <View key={letra} style={styles.bloco}>
+                          <Text style={styles.rotulo}>
+                            {letra} — {componente.nome || ''}
+                          </Text>
+                          <Text style={styles.texto}>
+                            Comparação descritiva:{' '}
+                            {componente.situacao_descritiva || 'Inconclusiva'}
+                          </Text>
+                          <Text style={styles.textoMenor}>
+                            Diferença no estado de avaliação:{' '}
+                            {componente.divergencia_status ? 'Sim' : 'Não'}
+                          </Text>
+                          <Text style={styles.textoMenor}>
+                            {componente.observacao_descritiva || ''}
+                          </Text>
+                        </View>
+                      ))}
+
+                      <Text style={styles.textoMenor}>
+                        Comparação auxiliar; não determina diagnóstico
+                        ou concordância clínica.
+                      </Text>
+                    </View>
+                  ) : null}
+
+                </>
+              ) : null}
+            </>
+          ) : null}
+          <TouchableOpacity accessibilityRole="button" onPress={abrirRelatorio}>
+            <Text style={styles.link}>Abrir avaliação no histórico</Text>
           </TouchableOpacity>
-        ))}
-      </View>
-
-      <Campo
-        titulo="Nível de dor (0 a 10)"
-        valor={nivelDor}
-        alterar={setNivelDor}
-      />
-      <Campo
-        titulo="Queixa principal"
-        valor={queixaPrincipal}
-        alterar={setQueixaPrincipal}
-        multiline
-      />
-      <Campo
-        titulo="Observações clínicas"
-        valor={observacoes}
-        alterar={setObservacoes}
-        multiline
-      />
-
-      <Text style={styles.titulo}>2. Fotografia</Text>
-
-      {imagemUri ? (
-        <Image
-          source={{ uri: imagemUri }}
-          style={styles.imagem}
-          resizeMode="contain"
-        />
+        </>
       ) : null}
 
-      <TouchableOpacity
-        style={styles.botaoCinza}
-        onPress={() => selecionarImagem(true)}
-        disabled={carregando}
-      >
-        <Text style={styles.botaoTexto}>
-          Tirar fotografia
-        </Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={styles.botaoCinza}
-        onPress={() => selecionarImagem(false)}
-        disabled={carregando}
-      >
-        <Text style={styles.botaoTexto}>
-          Selecionar da galeria
-        </Text>
-      </TouchableOpacity>
-
-      <Text style={styles.titulo}>
-        3. Inteligências artificiais
-      </Text>
-
-      {PROVEDORES.map(item => (
-        <TouchableOpacity
-          key={item.valor}
-          style={[
-            styles.opcao,
-            provedor === item.valor && styles.opcaoAtiva,
-          ]}
-          onPress={() => setProvedor(item.valor)}
-          disabled={carregando}
-        >
-          <Text style={styles.texto}>
-            {item.titulo}
-          </Text>
-        </TouchableOpacity>
-      ))}
-
-      <TouchableOpacity
-        style={styles.botao}
-        onPress={analisar}
-        disabled={carregando}
-      >
-        {carregando ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.botaoTexto}>
-            Analisar fotografia
-          </Text>
-        )}
-      </TouchableOpacity>
-
-      {resultado ? (
+      {etapa === 'revisao' && resultado && respostaEscolhida ? (
         <>
-          <Text style={styles.titulo}>
-            4. Resultados
-          </Text>
-
+          <TouchableOpacity accessibilityRole="button" onPress={() => setEtapa('resultados')} disabled={salvandoRevisao}>
+            <Text style={styles.link}>Voltar para as análises</Text>
+          </TouchableOpacity>
           <View style={styles.card}>
-            <Text style={styles.texto}>
-              Confira as análises disponíveis e revise os resultados.
-            </Text>
-            <Text style={styles.textoMenor}>
-              Avaliação nº {resultado.analise_id}
-            </Text>
+            <Text style={styles.subtitulo}>{nomesModelos[provedorEscolhido.toLowerCase()] || provedorEscolhido}</Text>
+            {cardFoto(provedorEscolhido)}
+            <RelatorioCompleto resposta={respostaEscolhida} mostrarDescricao={false} />
           </View>
-
-          {/* ETAPA 2J: CONFIANÇA DAS TRÊS IAS */}
-          <ComparacaoConfiancaIA
-            resultados={resultados}
-          />
-
-          <FotografiasAvaliacao
-            alertasContornos={Object.fromEntries(
-              Object.entries(resultados).map(([nome, item]) => [
-                nome.toLowerCase(),
-                (
-                  item.resposta?.marcacoes_imagem?.limitacoes ?? []
-                ).filter(aviso =>
-                  aviso.startsWith('[AUDITORIA_CONTORNO]')
-                ),
-              ])
-            )}
-            imagens={resultado}
-            onAtualizar={atualizarFotografias}
-            onGerar={gerarMarcacoes}
-            gerando={gerandoMarcacoes}
-            onReprocessarOpenAI={reprocessarOpenAI}
-            reprocessandoOpenAI={reprocessandoOpenAI}
-          />
-
           {pacienteId && resultado.analise_id ? (
             <EditorMarcacoes
               pacienteId={pacienteId}
@@ -754,77 +928,10 @@ export default function NovaAvaliacaoScreen() {
             />
           ) : null}
 
-          {resultado.comparacao_multimodal?.componentes ? (
-            <View style={styles.card}>
-              <Text style={styles.subtitulo}>
-                Comparação das análises T.I.M.E.S.
-              </Text>
-
-              {Object.entries(
-                resultado.comparacao_multimodal.componentes
-              ).map(([letra, componente]) => (
-                <View key={letra} style={styles.bloco}>
-                  <Text style={styles.rotulo}>
-                    {letra} — {componente.nome || ''}
-                  </Text>
-                  <Text style={styles.texto}>
-                    Comparação descritiva:{' '}
-                    {componente.situacao_descritiva || 'Inconclusiva'}
-                  </Text>
-                  <Text style={styles.textoMenor}>
-                    Diferença no estado de avaliação:{' '}
-                    {componente.divergencia_status ? 'Sim' : 'Não'}
-                  </Text>
-                  <Text style={styles.textoMenor}>
-                    {componente.observacao_descritiva || ''}
-                  </Text>
-                </View>
-              ))}
-
-              <Text style={styles.textoMenor}>
-                Comparação auxiliar; não determina diagnóstico
-                ou concordância clínica.
-              </Text>
-            </View>
-          ) : null}
-
-          <Text style={styles.titulo}>
-            Resultados das IAs
-          </Text>
-
-          {Object.entries(resultados).map(([nome, item]) => (
-            <View key={nome} style={styles.card}>
-              <Text style={styles.subtitulo}>
-                {nome.toUpperCase()} —{' '}
-                {item.sucesso ? 'SUCESSO' : 'FALHA'}
-              </Text>
-
-              {item.sucesso && item.resposta ? (
-                <>
-                  <RelatorioCompleto resposta={item.resposta} />
-
-                  <TouchableOpacity
-                    style={styles.botao}
-                    onPress={() => selecionarProvedor(nome)}
-                  >
-                    <Text style={styles.botaoTexto}>
-                      Selecionar para revisão
-                    </Text>
-                  </TouchableOpacity>
-                </>
-              ) : (
-                <Text style={styles.erro}>
-                  Não foi possível concluir esta análise.
-                  Tente novamente mais tarde.
-                </Text>
-              )}
-            </View>
-          ))}
-
           {provedorEscolhido ? (
             <View style={styles.card}>
               <Text style={styles.titulo}>
-                5. Revisão profissional
+                Revisão profissional
               </Text>
 
               <Text style={styles.texto}>
@@ -870,6 +977,9 @@ export default function NovaAvaliacaoScreen() {
             </View>
           ) : null}
 
+          <TouchableOpacity accessibilityRole="button" style={styles.botao} onPress={abrirRelatorio} disabled={salvandoRevisao}>
+            <Text style={styles.botaoTexto}>Abrir relatório para aprovação</Text>
+          </TouchableOpacity>
           <View style={styles.card}>
             <Text style={styles.subtitulo}>
               Validação profissional obrigatória
@@ -882,6 +992,7 @@ export default function NovaAvaliacaoScreen() {
               a avaliação presencial do enfermeiro.
             </Text>
           </View>
+
         </>
       ) : null}
     </ScrollView>
@@ -889,22 +1000,36 @@ export default function NovaAvaliacaoScreen() {
 }
 
 const styles = StyleSheet.create({
+  pagina: { flex: 1, backgroundColor: '#fff' },
   container: {
+    width: '100%',
+    maxWidth: 920,
+    alignSelf: 'center',
     padding: 18,
     paddingBottom: 60,
-    backgroundColor: '#f8fafc',
+    flexGrow: 1,
   },
+  link: {
+    color: '#005088',
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+    paddingVertical: 12,
+  },
+  aviso: { backgroundColor: '#fff7ed', padding: 12, borderRadius: 8 },
+  processando: { flex: 1, minHeight: 290, gap: 18, justifyContent: 'center', alignItems: 'center' },
+  miniatura: { width: '100%', height: 240, backgroundColor: '#eef2f6', borderRadius: 12, marginBottom: 6 },
+  desabilitado: { opacity: 0.55 },
   titulo: {
     fontSize: 19,
     fontWeight: 'bold',
-    color: '#0056b3',
+    color: '#005088',
     marginTop: 18,
     marginBottom: 12,
   },
   subtitulo: {
     fontSize: 15,
     fontWeight: 'bold',
-    color: '#0056b3',
+    color: '#005088',
     marginBottom: 8,
   },
   rotulo: {
@@ -926,9 +1051,9 @@ const styles = StyleSheet.create({
     marginBottom: 5,
   },
   input: {
-    backgroundColor: '#fff',
+    backgroundColor: '#dce6ed',
     borderWidth: 1,
-    borderColor: '#cbd5e1',
+    borderColor: '#809BAE',
     borderRadius: 8,
     padding: 12,
     fontSize: 14,
@@ -957,13 +1082,13 @@ const styles = StyleSheet.create({
     marginBottom: 7,
   },
   opcaoAtiva: {
-    borderColor: '#0056b3',
+    borderColor: '#005088',
     backgroundColor: '#dbeafe',
   },
   botao: {
-    backgroundColor: '#0056b3',
+    backgroundColor: '#005088',
     padding: 14,
-    borderRadius: 8,
+    borderRadius: 16,
     alignItems: 'center',
     marginVertical: 10,
   },
@@ -986,12 +1111,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 14,
     marginBottom: 14,
-  },
-  secaoInterna: {
-    marginTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
-    paddingTop: 10,
   },
   grupo: {
     marginBottom: 10,
@@ -1024,3 +1143,4 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
 });
+
