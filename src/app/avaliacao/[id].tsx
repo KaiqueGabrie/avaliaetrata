@@ -2,6 +2,7 @@ import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -10,7 +11,7 @@ import {
   View,
 } from 'react-native';
 
-import BotaoRelatorioPdf from '../../components/botao-relatorio-pdf';
+import BotaoRelatorioPdf, { gerarRelatorioPdf } from '../../components/botao-relatorio-pdf';
 import ComparacaoConfiancaIA from '../../components/comparacao-confianca-ia';
 import EditorMarcacoes from '../../components/editor-marcacoes';
 import type { ImagensAvaliacao } from '../../components/fotografias-avaliacao';
@@ -267,8 +268,17 @@ export default function DetalheAvaliacaoScreen() {
     }
   };
 
+  const gerarPdfAoAprovar = Platform.OS === 'web' && Boolean(id && pacienteId);
+
   const aprovar = () => {
-    if (!relatorioAtual || relatorioAtual.status === 'aprovado') return;
+    if (salvando || !relatorioAtual || relatorioAtual.status === 'aprovado') return;
+
+    const descricaoSalva = relatorioAtual.conteudo_editavel.conteudo_descricao || '';
+
+    if (descricao.trim() !== descricaoSalva.trim()) {
+      Aviso.alert('Revisão pendente', 'Clique em Salvar revisão antes de aprovar o relatório.');
+      return;
+    }
 
     Aviso.alert(
       'Confirmar aprovação',
@@ -276,19 +286,41 @@ export default function DetalheAvaliacaoScreen() {
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Aprovar',
+          text: gerarPdfAoAprovar ? 'Confirmar e Gerar Relatório' : 'Aprovar',
           onPress: async () => {
             setSalvando(true);
 
             try {
-              await apiJson(`/analises/${id}/relatorios/${selecionado}/aprovar`, {
-                method: 'POST',
-              });
+              const resposta = await apiJson<{ relatorio: Relatorio }>(
+                '/analises/' + id + '/relatorios/' + relatorioAtual.provedor + '/aprovar',
+                { method: 'POST' },
+              );
 
-              await carregar();
-              Aviso.alert('Aprovado', 'Relatório aprovado com sucesso.');
-            } catch (e) {
-              Aviso.alert('Erro', e instanceof Error ? e.message : 'Falha ao aprovar.');
+              const aprovado = resposta.relatorio;
+
+              setRelatorios(anteriores => anteriores.map(item =>
+                item.provedor === aprovado.provedor ? aprovado : item,
+              ));
+
+              if (!gerarPdfAoAprovar || !pacienteId) {
+                Aviso.alert('Aprovado', 'Relatório aprovado com sucesso.');
+                return;
+              }
+
+              try {
+                await gerarRelatorioPdf({
+                  analiseId: id,
+                  pacienteId,
+                  provedor: aprovado.provedor,
+                  aprovadoEm: aprovado.data_aprovacao,
+                  relatorio: aprovado.conteudo_editavel,
+                });
+              } catch (erro) {
+                const detalhe = erro instanceof Error ? erro.message : 'Tente novamente.';
+                Aviso.alert('Relatório aprovado', detalhe + ' Use Gerar PDF para exportar novamente.');
+              }
+            } catch (erro) {
+              Aviso.alert('Falha ao aprovar', erro instanceof Error ? erro.message : 'Tente novamente.');
             } finally {
               setSalvando(false);
             }
@@ -433,7 +465,9 @@ export default function DetalheAvaliacaoScreen() {
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.botao} onPress={aprovar} disabled={salvando}>
-                <Text style={styles.botaoTexto}>Aprovar relatório</Text>
+                <Text style={styles.botaoTexto}>
+                  {gerarPdfAoAprovar ? 'Confirmar e Gerar Relatório' : 'Aprovar relatório'}
+                </Text>
               </TouchableOpacity>
             </>
           )}

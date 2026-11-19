@@ -1,6 +1,5 @@
-
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -22,6 +21,29 @@ export default function WelcomeScreen() {
   const [senha, setSenha] = useState('');
   const [carregando, setCarregando] = useState(false);
   const [mensagemErro, setMensagemErro] = useState('');
+  const [loginDemorado, setLoginDemorado] = useState(false);
+
+  useEffect(() => {
+    const requisicao = new AbortController();
+
+    // A rota inicial da API é pública e não consulta o banco.
+    const endereco = API_URL.replace(/\/+$/, '');
+    void fetch(`${endereco}/`, {
+      signal: requisicao.signal,
+      cache: 'no-store',
+    }).catch(() => {
+      // O POST do login apresenta a falha ao usuário quando necessário.
+    });
+
+    return () => requisicao.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!carregando) return;
+
+    const aviso = setTimeout(() => setLoginDemorado(true), 5000);
+    return () => clearTimeout(aviso);
+  }, [carregando]);
 
   const mostrarErro = (titulo: string, mensagem: string) => {
     if (Platform.OS === 'web') {
@@ -42,6 +64,7 @@ export default function WelcomeScreen() {
       return;
     }
 
+    setLoginDemorado(false);
     setCarregando(true);
 
     try {
@@ -155,12 +178,19 @@ export default function WelcomeScreen() {
             </Text>
           )}
         </TouchableOpacity>
+
+        {carregando && loginDemorado ? (
+          <Text accessibilityLiveRegion="polite" style={styles.avisoAcesso}>
+            O servidor pode estar iniciando. Aguarde para entrar.
+          </Text>
+        ) : null}
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  avisoAcesso: { color: '#475569', fontSize: 13, marginTop: 8, textAlign: 'center' },
   container: {
     flex: 1,
     backgroundColor: '#0056b3',
@@ -224,3 +254,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 });
+

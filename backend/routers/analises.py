@@ -9,12 +9,13 @@ from fastapi import (
     Depends,
     File,
     HTTPException,
+    Query,
     UploadFile,
     Response,
     status,
 )
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -41,7 +42,7 @@ from services.image_processing import ImageProcessingService
 from services.medidas_geometricas import calcular_estimativas
 from services.visualizacao_bordas import VisualizacaoBordasService
 from services.storage import (
-    storage_ativo, criar_chave, enviar_arquivo,
+    bucket, storage_ativo, criar_chave, enviar_arquivo,
     remover_remotos, url_assinada, PREFIXO_STORAGE,
 )
 
@@ -372,6 +373,85 @@ def listar_analises(
 # ============================================================
 # CONSULTAR ANÁLISE ESPECÍFICA
 # ============================================================
+
+def _tecido_predominante(contexto: dict | None) -> dict | None:
+    revisao = (contexto or {}).get("revisao_marcacoes_profissional")
+    if not isinstance(revisao, dict) or revisao.get("status") != "aprovado":
+        return None
+
+    estatisticas = revisao.get("estatisticas")
+    if not isinstance(estatisticas, dict) or not estatisticas.get("disponivel"):
+        return None
+
+    percentuais = estatisticas.get("percentuais")
+    if not isinstance(percentuais, dict):
+        return None
+
+    classes = ("granulacao", "esfacelo", "necrose", "nao_classificado")
+    valores = {classe: percentuais.get(classe) for classe in classes}
+    if any(type(valor) not in (int, float) or not 0 <= valor <= 100 for valor in valores.values()):
+        return None
+
+    maior = max(valores.values())
+    lideres = [classe for classe, valor in valores.items() if valor == maior]
+    if maior <= 0 or len(lideres) != 1 or lideres[0] == "nao_classificado":
+        return None
+
+    return {"classe": lideres[0], "percentual": maior}
+
+
+@router.get("/previas")
+def consultar_previas_historico(
+    paciente_id: int,
+    response: Response,
+    ids: list[int] = Query(..., min_length=1, max_length=12),
+    db: Session = Depends(get_db),
+    enfermeiro: Enfermeiro = Depends(obter_enfermeiro_atual),
+):
+    obter_paciente_autorizado(paciente_id, enfermeiro, db)
+    response.headers["Cache-Control"] = "private, no-store"
+
+    linhas = db.execute(
+        select(Analise.id_analise, Analise.contexto_clinico_json, Imagem.caminho_imagem_marcada)
+        .outerjoin(Imagem, and_(
+            Imagem.id_analise_fk == Analise.id_analise,
+            Imagem.deleted_at.is_(None),
+        ))
+        .where(
+            Analise.id_paciente_fk == paciente_id,
+            Analise.id_enfermeiro_fk == enfermeiro.id_enfermeiro,
+            Analise.deleted_at.is_(None),
+            Analise.id_analise.in_(ids),
+        )
+    ).all()
+
+    previas = {}
+    chaves = {}
+    for analise_id, contexto, caminho in linhas:
+        previas[analise_id] = {
+            "imagem_url": None,
+            "tecido_predominante": _tecido_predominante(contexto),
+        }
+
+        if caminho and caminho.startswith(PREFIXO_STORAGE):
+            chave = caminho[len(PREFIXO_STORAGE):]
+            prefixo = f"processadas/{enfermeiro.id_enfermeiro}/{paciente_id}/{analise_id}/"
+            if chave.startswith(prefixo) and ".." not in Path(chave).parts:
+                chaves[chave] = analise_id
+
+    if chaves:
+        try:
+            if storage_ativo():
+                for item in bucket().create_signed_urls(list(chaves), 300):
+                    analise_id = chaves.get(item.get("path"))
+                    url = item.get("signedURL") or item.get("signedUrl") or item.get("signed_url")
+                    if analise_id is not None and url and not item.get("error"):
+                        previas[analise_id]["imagem_url"] = url
+        except Exception:
+            logger.exception("Não foi possível assinar as prévias do histórico.")
+
+    return {"previas": previas}
+
 
 @router.get(
     "/{analise_id}",

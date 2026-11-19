@@ -297,6 +297,44 @@ async function imprimirRelatorio(html: string) {
   }
 }
 
+export async function gerarRelatorioPdf(props: Props) {
+  const pacienteUrl = `/pacientes/${props.pacienteId}`;
+  const avaliacoesUrl = `${pacienteUrl}/analises`;
+  const caminho = `${avaliacoesUrl}/${props.analiseId}`;
+  const provedor = props.provedor.trim().toLowerCase();
+
+  const [paciente, avaliacoes, editor] = await Promise.all([
+    apiJson<Paciente>(pacienteUrl),
+    apiJson<AnaliseResumo[]>(avaliacoesUrl),
+    apiJson<DadosEditor>(`${caminho}/marcacoes/editor`)
+      .catch((): DadosEditor => ({ revisao: null })),
+  ]);
+
+  const avaliacao = avaliacoes.find(
+    item => String(item.id_analise) === props.analiseId,
+  );
+
+  if (!avaliacao) {
+    throw new Error('A avaliação não foi localizada no histórico deste paciente.');
+  }
+
+  const revisao = editor.revisao;
+  const imagemAprovada =
+    revisao?.status === 'aprovado' &&
+    (revisao.provedor_base === provedor || revisao.provedor_base === 'manual') &&
+    urlDaImagem(revisao.imagem_url)
+      ? revisao
+      : null;
+
+  const marcacao = imagemAprovada
+    ? undefined
+    : await buscarMarcacao(caminho, provedor);
+
+  await imprimirRelatorio(
+    montarRelatorio(props, paciente, avaliacao.data_analise, imagemAprovada, marcacao),
+  );
+}
+
 export default function BotaoRelatorioPdf(props: Props) {
   const [gerando, setGerando] = useState(false);
   const emAndamento = useRef(false);
@@ -309,42 +347,8 @@ export default function BotaoRelatorioPdf(props: Props) {
     emAndamento.current = true;
     setGerando(true);
 
-    const pacienteUrl = `/pacientes/${props.pacienteId}`;
-    const avaliacoesUrl = `${pacienteUrl}/analises`;
-    const caminho = `${avaliacoesUrl}/${props.analiseId}`;
-    const provedor = props.provedor.trim().toLowerCase();
-
     try {
-      const [paciente, avaliacoes, editor] = await Promise.all([
-        apiJson<Paciente>(pacienteUrl),
-        apiJson<AnaliseResumo[]>(avaliacoesUrl),
-        apiJson<DadosEditor>(`${caminho}/marcacoes/editor`)
-          .catch((): DadosEditor => ({ revisao: null })),
-      ]);
-
-      const avaliacao = avaliacoes.find(
-        item => String(item.id_analise) === props.analiseId,
-      );
-
-      if (!avaliacao) {
-        throw new Error('A avaliação não foi localizada no histórico deste paciente.');
-      }
-
-      const revisao = editor.revisao;
-      const imagemAprovada =
-        revisao?.status === 'aprovado' &&
-        (revisao.provedor_base === provedor || revisao.provedor_base === 'manual') &&
-        urlDaImagem(revisao.imagem_url)
-          ? revisao
-          : null;
-
-      const marcacao = imagemAprovada
-        ? undefined
-        : await buscarMarcacao(caminho, provedor);
-
-      await imprimirRelatorio(
-        montarRelatorio(props, paciente, avaliacao.data_analise, imagemAprovada, marcacao),
-      );
+      await gerarRelatorioPdf(props);
     } catch (erro) {
       Aviso.alert(
         'Falha ao preparar o PDF',
