@@ -400,6 +400,52 @@ def _tecido_predominante(contexto: dict | None) -> dict | None:
     return {"classe": lideres[0], "percentual": maior}
 
 
+
+def _resumo_revisao_aprovada(contexto: dict | None) -> dict | None:
+    revisao = (contexto or {}).get("revisao_marcacoes_profissional")
+    if not isinstance(revisao, dict):
+        return None
+
+    if revisao.get("status") != "aprovado":
+        return None
+
+    estatisticas = revisao.get("estatisticas")
+    if not isinstance(estatisticas, dict):
+        return None
+
+    if not estatisticas.get("disponivel"):
+        return None
+
+    percentuais = estatisticas.get("percentuais")
+    if not isinstance(percentuais, dict):
+        return None
+
+    classes = (
+        "granulacao",
+        "esfacelo",
+        "necrose",
+        "nao_classificado",
+    )
+
+    valores = {}
+
+    for classe in classes:
+        valor = percentuais.get(classe)
+        if (
+            type(valor) not in (int, float)
+            or not 0 <= valor <= 100
+        ):
+            return None
+        valores[classe] = valor
+
+    return {
+        "status": "aprovado",
+        "versao": revisao.get("versao"),
+        "provedor_base": revisao.get("provedor_base"),
+        "percentuais": valores,
+    }
+
+
 @router.get("/previas")
 def consultar_previas_historico(
     paciente_id: int,
@@ -431,6 +477,7 @@ def consultar_previas_historico(
         previas[analise_id] = {
             "imagem_url": None,
             "tecido_predominante": _tecido_predominante(contexto),
+            "revisao_resumo": _resumo_revisao_aprovada(contexto),
         }
 
         if caminho and caminho.startswith(PREFIXO_STORAGE):

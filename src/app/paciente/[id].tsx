@@ -17,7 +17,20 @@ import { formatarData } from '../../types/paciente';
 
 const POR_PAGINA = 12;
 
+type ResumoRevisao = {
+  status: 'aprovado';
+  versao: number | null;
+  provedor_base: string | null;
+  percentuais: {
+    granulacao: number;
+    esfacelo: number;
+    necrose: number;
+    nao_classificado: number;
+  };
+};
+
 type Previa = {
+  revisao_resumo?: ResumoRevisao | null;
   imagem_url: string | null;
   tecido_predominante: {
     classe: 'granulacao' | 'esfacelo' | 'necrose';
@@ -262,6 +275,7 @@ export default function ProntuarioPacienteScreen() {
             const situacao = situacaoAvaliacao(analise.status);
             const previa = previas[analise.id_analise];
             const tecido = previa?.tecido_predominante;
+            const resumo = previa?.revisao_resumo;
 
             return (
               <TouchableOpacity
@@ -291,10 +305,32 @@ export default function ProntuarioPacienteScreen() {
                 <Text style={styles.queixa} numberOfLines={2}>
                   Queixa: {analise.queixa_principal || 'Não informada'}
                 </Text>
-                {tecido ? (
-                  <Text style={styles.tecido}>
-                    Tecido predominante na revisão: {nomesTecidos[tecido.classe]} ({tecido.percentual.toLocaleString('pt-BR')}%)
-                  </Text>
+                {resumo ? (
+                  <View style={styles.resumoTecidos}>
+                    <Text style={styles.resumoTitulo}>
+                      Revisão profissional aprovada
+                      {resumo.provedor_base
+                        ? ' — ' + resumo.provedor_base.toUpperCase()
+                        : ''}
+                    </Text>
+                    <Text style={styles.tecido}>
+                      Granulação: {resumo.percentuais.granulacao.toLocaleString('pt-BR')}%
+                      {' · '}Esfacelo: {resumo.percentuais.esfacelo.toLocaleString('pt-BR')}%
+                    </Text>
+                    <Text style={styles.tecido}>
+                      Necrose: {resumo.percentuais.necrose.toLocaleString('pt-BR')}%
+                      {' · '}Não classificado: {resumo.percentuais.nao_classificado.toLocaleString('pt-BR')}%
+                    </Text>
+                    {tecido ? (
+                      <Text style={styles.resumoTitulo}>
+                        Tecido predominante: {nomesTecidos[tecido.classe]}
+                      </Text>
+                    ) : (
+                      <Text style={styles.resumoObservacao}>
+                        Nenhum tecido classificado predomina sobre a área não classificada.
+                      </Text>
+                    )}
+                  </View>
                 ) : null}
                 <Text style={styles.acao}>Abrir relatórios</Text>
                   </View>
@@ -366,6 +402,23 @@ const styles = StyleSheet.create({
   previaAvaliacao: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
   dadosAvaliacao: { flex: 1, minWidth: 0 },
   miniatura: { width: 68, height: 68, borderRadius: 8, backgroundColor: '#eef2f6' },
+  resumoTecidos: {
+    backgroundColor: '#f1f5f9',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+  },
+  resumoTitulo: {
+    color: '#0056b3',
+    fontWeight: '700',
+    fontSize: 13,
+    marginBottom: 5,
+  },
+  resumoObservacao: {
+    color: '#64748b',
+    fontSize: 12,
+    marginTop: 3,
+  },
   tecido: { color: '#334155', fontSize: 13, marginBottom: 8 },
   paginacao: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   botaoPagina: { minHeight: 44, paddingHorizontal: 10, justifyContent: 'center' },

@@ -314,6 +314,34 @@ export default function EditorMarcacoes({ pacienteId, analiseId }: {
         {rev.imagem_url ? <Image source={{ uri: rev.imagem_url }} style={{ width: '100%', height: 280 }} resizeMode="contain" />
           : <Text style={styles.erro}>A revisão está registrada, mas a imagem não está disponível. Abra o editor e atualize o acesso.</Text>}
         <Text style={styles.legenda}>Esta é a imagem corrigida pelo enfermeiro. As imagens acima continuam mostrando as propostas originais das IAs.</Text>
+        {rev.status === 'aprovado' && rev.estatisticas ? (
+          <View style={styles.estatisticas}>
+            <Text style={styles.subtitulo}>
+              Proporções da imagem aprovada
+            </Text>
+            {rev.estatisticas.disponivel &&
+            rev.estatisticas.percentuais ? (
+              <>
+                {(['granulacao', 'esfacelo', 'necrose', 'nao_classificado'] as Classe[]).map(classe => {
+                  const percentual = rev.estatisticas?.percentuais?.[classe];
+                  return typeof percentual === 'number' ? (
+                    <Text key={classe} style={styles.legenda}>
+                      {nome(classe)}: {percentual.toLocaleString('pt-BR')}%
+                    </Text>
+                  ) : null;
+                })}
+                <Text style={styles.legenda}>
+                  Percentuais dentro do contorno revisado pelo profissional.
+                  Não representam área em cm² ou diagnóstico automático.
+                </Text>
+              </>
+            ) : (
+              <Text style={styles.legenda}>
+                {rev.estatisticas.motivo || 'Percentuais indisponíveis.'}
+              </Text>
+            )}
+          </View>
+        ) : null}
         <Botao texto="Atualizar imagem revisada" onPress={() => void carregar()} desabilitado={carregando} />
       </View> : !carregando && !erro ? <Text style={styles.legenda}>Ainda não existe revisão profissional salva nesta avaliação.</Text> : null}
     </View> : null}
