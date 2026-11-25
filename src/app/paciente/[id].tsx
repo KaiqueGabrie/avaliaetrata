@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 
+import IconeInterface from '../../components/icone-interface';
 import { apiJson } from '../../config/cliente';
 import type { AnaliseResumo, Paciente } from '../../types/paciente';
 import { formatarData } from '../../types/paciente';
@@ -192,21 +193,184 @@ export default function ProntuarioPacienteScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       {carregandoPaciente && String(paciente?.id_paciente) !== id ? (
-        <ActivityIndicator size="large" color="#0056b3" />
+        <ActivityIndicator size="large" color="#005088" />
       ) : null}
       {erroPaciente ? <Text style={styles.erro}>{erroPaciente}</Text> : null}
 
       {paciente && String(paciente.id_paciente) === id ? (
         <>
           <View style={styles.cardHeader}>
-            <Text style={styles.nome}>{paciente.nome_completo}</Text>
-            <Text style={styles.subtext}>Prontuário nº {paciente.id_paciente}</Text>
-            <Text style={styles.subtext}>CPF: {paciente.cpf || 'Não informado'}</Text>
-            <Text style={styles.subtext}>Data Nasc.: {formatarData(paciente.data_nascimento)}</Text>
-            <Text style={styles.subtext}>Telefone: {paciente.telefone || 'Não informado'}</Text>
-            <Text style={styles.subtext}>Diagnóstico: {paciente.diagnostico || 'Não informado'}</Text>
-            <Text style={styles.subtext}>Local da lesão: {paciente.local_lesao || 'Não informado'}</Text>
-            <Text style={styles.subtext}>Evolução: {paciente.status_evolucao || 'Ainda não avaliada'}</Text>
+            <View style={styles.identificacaoPaciente}>
+              <View style={styles.avatarPaciente}>
+                <IconeInterface nome="perfil" tamanho={34} />
+              </View>
+
+              <View style={styles.dadosIdentificacao}>
+                <Text style={styles.nome}>
+                  {paciente.nome_completo}
+                </Text>
+
+                <Text style={styles.subtext}>
+                  Prontuário nº {paciente.id_paciente}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Editar paciente"
+                style={styles.botaoEditarPaciente}
+                onPress={() => router.push({
+                  pathname: '/paciente/novo',
+                  params: { editarId: String(paciente.id_paciente) },
+                })}
+              >
+                <IconeInterface nome="editar" tamanho={18} />
+                <Text style={styles.textoEditarPaciente}>Editar</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.divisorPaciente} />
+
+            <View style={styles.gradePaciente}>
+              <View style={styles.campoPaciente}>
+                <Text style={styles.rotuloPaciente}>CPF</Text>
+                <Text style={styles.valorPaciente}>
+                  {paciente.cpf || 'Não informado'}
+                </Text>
+              </View>
+
+              <View style={styles.campoPaciente}>
+                <Text style={styles.rotuloPaciente}>Data de nascimento</Text>
+                <Text style={styles.valorPaciente}>
+                  {formatarData(paciente.data_nascimento)}
+                </Text>
+              </View>
+
+              <View style={styles.campoPaciente}>
+                <Text style={styles.rotuloPaciente}>Telefone</Text>
+                <Text style={styles.valorPaciente}>
+                  {paciente.telefone || 'Não informado'}
+                </Text>
+              </View>
+
+              <View style={styles.campoPaciente}>
+                <Text style={styles.rotuloPaciente}>E-mail</Text>
+                <Text style={styles.valorPaciente}>
+                  {paciente.email || 'Não informado'}
+                </Text>
+              </View>
+
+              <View style={styles.campoPaciente}>
+                <Text style={styles.rotuloPaciente}>Diagnóstico de base</Text>
+                <Text style={styles.valorPaciente}>
+                  {paciente.diagnostico || 'Não informado'}
+                </Text>
+              </View>
+
+              <View style={styles.campoPaciente}>
+                <Text style={styles.rotuloPaciente}>Local da lesão</Text>
+                <Text style={styles.valorPaciente}>
+                  {paciente.local_lesao || 'Não informado'}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.divisorPaciente} />
+
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Consultar anamnese de admissão"
+              style={styles.botaoAnamnese}
+              onPress={() => router.push({
+                pathname: '/paciente/anamnese',
+                params: {
+                  pacienteId: String(paciente.id_paciente),
+                },
+              })}
+            >
+              <View style={styles.iconeAnamnese}>
+                <IconeInterface
+                  nome="arquivo"
+                  tamanho={25}
+                />
+              </View>
+
+              <View style={styles.textosAnamnese}>
+                <Text style={styles.tituloAnamnese}>
+                  Anamnese de admissão
+                </Text>
+
+                <Text style={styles.descricaoAnamnese}>
+                  Consulte e atualize o histórico clínico.
+                </Text>
+              </View>
+
+              <IconeInterface
+                nome="seta"
+                tamanho={20}
+                cor="#809bae"
+              />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Consultar termo de consentimento"
+              style={styles.botaoAnamnese}
+              onPress={() => router.push({
+                pathname: '/paciente/consentimento',
+                params: {
+                  pacienteId: String(paciente.id_paciente),
+                },
+              })}
+            >
+              <View style={styles.iconeAnamnese}>
+                <IconeInterface
+                  nome="escudo"
+                  tamanho={25}
+                />
+              </View>
+
+              <View style={styles.textosAnamnese}>
+                <Text style={styles.tituloAnamnese}>
+                  Termo de consentimento
+                </Text>
+
+                <Text style={styles.descricaoAnamnese}>
+                  Gere e consulte os documentos assinados.
+                </Text>
+              </View>
+
+              <IconeInterface
+                nome="seta"
+                tamanho={20}
+                cor="#809bae"
+              />
+            </TouchableOpacity>
+
+            <View style={styles.evolucaoPaciente}>
+              <Text style={styles.rotuloPaciente}>
+                Evolução registrada pelo profissional
+              </Text>
+
+              <Text style={[
+                styles.valorEvolucao,
+                paciente.status_evolucao === 'melhora'
+                  ? { color: '#15803d', backgroundColor: '#dcfce7' }
+                  : paciente.status_evolucao === 'piora'
+                    ? { color: '#b91c1c', backgroundColor: '#fee2e2' }
+                    : paciente.status_evolucao === 'estavel'
+                      ? { color: '#854d0e', backgroundColor: '#fef3c7' }
+                      : { color: '#64748b', backgroundColor: '#f1f5f9' },
+              ]}>
+                {paciente.status_evolucao === 'melhora'
+                  ? 'Melhora'
+                  : paciente.status_evolucao === 'piora'
+                    ? 'Piora'
+                    : paciente.status_evolucao === 'estavel'
+                      ? 'Estável'
+                      : 'Não avaliada'}
+              </Text>
+            </View>
           </View>
 
           <TouchableOpacity
@@ -367,12 +531,150 @@ export default function ProntuarioPacienteScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 20, backgroundColor: '#f8fafc', flexGrow: 1 },
-  cardHeader: { backgroundColor: '#0056b3', padding: 16, borderRadius: 8, marginBottom: 16 },
-  nome: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
-  subtext: { fontSize: 13, color: '#e2e8f0', marginTop: 2 },
+
+  botaoAnamnese: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#ccdfec',
+    borderRadius: 10,
+    backgroundColor: '#f5f9fc',
+    marginBottom: 18,
+  },
+
+  iconeAnamnese: {
+    width: 44,
+    height: 44,
+    backgroundColor: '#e5eff6',
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  textosAnamnese: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  tituloAnamnese: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#005088',
+    marginBottom: 5,
+  },
+
+  descricaoAnamnese: {
+    color: '#64748b',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+
+
+  container: {
+    padding: 20,
+    backgroundColor: '#f5f7fa',
+    flexGrow: 1,
+    width: '100%',
+    maxWidth: 1120,
+    alignSelf: 'center',
+  },
+  cardHeader: {
+    backgroundColor: '#ffffff',
+    padding: 18,
+    borderRadius: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#dbe4ec',
+  },
+
+  identificacaoPaciente: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 12,
+  },
+
+  avatarPaciente: {
+    width: 62,
+    height: 62,
+    backgroundColor: '#e5eff6',
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  dadosIdentificacao: {
+    flex: 1,
+    minWidth: 120,
+  },
+
+  botaoEditarPaciente: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#eaf2f8',
+    minHeight: 44,
+    borderRadius: 8,
+    padding: 12,
+  },
+
+  textoEditarPaciente: {
+    color: '#005088',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  divisorPaciente: {
+    height: 1,
+    backgroundColor: '#dbe4ec',
+    marginVertical: 16,
+  },
+
+  gradePaciente: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 16,
+  },
+
+  campoPaciente: {
+    flexGrow: 1,
+    flexBasis: 220,
+    minWidth: 0,
+  },
+
+  rotuloPaciente: {
+    fontSize: 12,
+    color: '#64748b',
+    marginBottom: 5,
+  },
+
+  valorPaciente: {
+    fontSize: 14,
+    color: '#1e293b',
+    fontWeight: '500',
+  },
+
+  evolucaoPaciente: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 10,
+  },
+
+  valorEvolucao: {
+    fontWeight: '700',
+    fontSize: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 18,
+  },
+  nome: { fontSize: 20, fontWeight: 'bold', color: '#005088' },
+  subtext: { fontSize: 13, color: '#64748b', marginTop: 4 },
   btnNovaAvaliacao: {
-    backgroundColor: '#0056b3',
+    backgroundColor: '#005088',
     paddingVertical: 14,
     borderRadius: 8,
     alignItems: 'center',
@@ -387,7 +689,7 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 24,
   },
-  tituloTutorial: { fontSize: 14, fontWeight: 'bold', color: '#0056b3', marginBottom: 4 },
+  tituloTutorial: { fontSize: 14, fontWeight: 'bold', color: '#005088', marginBottom: 4 },
   sectionTitle: { fontSize: 16, fontWeight: 'bold', color: '#1e293b', marginBottom: 12 },
   cardAvaliacao: {
     backgroundColor: '#fff',
@@ -397,7 +699,7 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 16,
   },
-  dataAvaliacao: { fontSize: 14, fontWeight: 'bold', color: '#0056b3', marginBottom: 4 },
+  dataAvaliacao: { fontSize: 14, fontWeight: 'bold', color: '#005088', marginBottom: 4 },
   textoAvaliacao: { fontSize: 13, color: '#475569' },
   previaAvaliacao: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
   dadosAvaliacao: { flex: 1, minWidth: 0 },
@@ -409,7 +711,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   resumoTitulo: {
-    color: '#0056b3',
+    color: '#005088',
     fontWeight: '700',
     fontSize: 13,
     marginBottom: 5,

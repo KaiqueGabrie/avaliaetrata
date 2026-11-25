@@ -19,6 +19,7 @@ from database import get_db
 from models import Analise, Enfermeiro, Imagem, RelatorioIA
 from routers.auth import router as auth_router, obter_enfermeiro_atual
 from routers.pacientes import router as pacientes_router
+from routers.consentimento import router as consentimento_router
 from routers.analises import router as analises_router
 from routers.relatorios_persistentes import router as relatorios_persistentes_router
 from routers.comparacoes import router as comparacoes_router, salvar_comparacao
@@ -56,6 +57,7 @@ app = FastAPI(
 # Cada router e registrado uma unica vez.
 app.include_router(auth_router)
 app.include_router(pacientes_router)
+app.include_router(consentimento_router)
 app.include_router(analises_router)
 app.include_router(relatorios_persistentes_router)
 app.include_router(comparacoes_router)

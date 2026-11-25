@@ -7,3 +7,4 @@ from .analise import Analise
 from .imagem import Imagem
 from .relatorio import RelatorioIA, HistoricoEdicao
 from .auditoria import LogAuditoria
+from .consentimento import TermoConsentimento
