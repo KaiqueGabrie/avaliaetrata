@@ -1,84 +1,384 @@
+
 import { useRouter } from 'expo-router';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+
+import IconeInterface, {
+  type NomeIcone,
+} from '../components/icone-interface';
+
+type Destino =
+  | '/pacientes'
+  | '/paciente/novo'
+  | '/perfil'
+  | '/explore';
+
+type Atalho = {
+  titulo: string;
+  descricao: string;
+  icone: NomeIcone;
+  destino: Destino;
+};
+
+const atalhos: Atalho[] = [
+  {
+    titulo: 'Lista de pacientes',
+    descricao:
+      'Consulte os prontuários e acompanhe as avaliações realizadas.',
+    icone: 'pacientes',
+    destino: '/pacientes',
+  },
+  {
+    titulo: 'Cadastrar paciente',
+    descricao:
+      'Registre as informações de um novo paciente.',
+    icone: 'novo-paciente',
+    destino: '/paciente/novo',
+  },
+  {
+    titulo: 'Nova avaliação clínica',
+    descricao:
+      'Selecione um paciente para registrar uma avaliação.',
+    icone: 'avaliacao',
+    destino: '/pacientes',
+  },
+  {
+    titulo: 'Meu perfil',
+    descricao:
+      'Consulte e atualize seus dados profissionais.',
+    icone: 'perfil',
+    destino: '/perfil',
+  },
+];
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { width } = useWindowDimensions();
+
+  const telaLarga = width >= 760;
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.welcomeTitle}>Bem-vindo ao Avalia & Trata</Text>
-      <Text style={styles.subtitle}>Selecione uma das opções abaixo para navegar no aplicativo:</Text>
+    <ScrollView
+      style={styles.tela}
+      contentContainerStyle={styles.scroll}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.container}>
+        <View style={styles.cabecalho}>
+          <View style={styles.marca}>
+            <View style={styles.logo}>
+              <IconeInterface
+                nome="avaliacao"
+                tamanho={28}
+                cor="#ffffff"
+              />
+            </View>
 
-      <TouchableOpacity
-        style={styles.card}
-        activeOpacity={0.7}
-        onPress={() => router.push('/pacientes')}
-      >
-        <Text style={styles.cardIcon}>👥</Text>
-        <View style={styles.cardTextContainer}>
-          <Text style={styles.cardTitle}>Lista de Pacientes</Text>
-          <Text style={styles.cardDescription}>Consulte os cadastros e acompanhe as avaliações realizadas.</Text>
-        </View>
-      </TouchableOpacity>
+            <Text style={styles.nomeSistema}>
+              Avalia & Trata
+            </Text>
+          </View>
 
-      <TouchableOpacity
-        style={styles.card}
-        activeOpacity={0.7}
-        onPress={() => router.push('/paciente/novo')}
-      >
-        <Text style={styles.cardIcon}>➕</Text>
-        <View style={styles.cardTextContainer}>
-          <Text style={styles.cardTitle}>Cadastrar Novo Paciente</Text>
-          <Text style={styles.cardDescription}>Registre as informações de identificação do paciente.</Text>
-        </View>
-      </TouchableOpacity>
+          <Text style={styles.bemVindo}>
+            Bem-vindo!
+          </Text>
 
-      <TouchableOpacity
-        style={styles.card}
-        activeOpacity={0.7}
-        onPress={() => router.push('/pacientes')}
-      >
-        <Text style={styles.cardIcon}>📋</Text>
-        <View style={styles.cardTextContainer}>
-          <Text style={styles.cardTitle}>Nova Avaliação Clínica</Text>
-          <Text style={styles.cardDescription}>Selecione um paciente para registrar e analisar uma lesão.</Text>
+          <Text style={styles.descricaoCabecalho}>
+            Avaliação de lesões cutâneas,
+            registro clínico e acompanhamento de pacientes.
+          </Text>
         </View>
-      </TouchableOpacity>
 
-      <TouchableOpacity
-        style={styles.card}
-        activeOpacity={0.7}
-        onPress={() => router.push('/perfil')}
-      >
-        <Text style={styles.cardIcon}>👩‍⚕️</Text>
-        <View style={styles.cardTextContainer}>
-          <Text style={styles.cardTitle}>Meu Perfil</Text>
-          <Text style={styles.cardDescription}>Consulte e atualize seus dados profissionais ou saia da conta.</Text>
-        </View>
-      </TouchableOpacity>
+        <Text style={styles.tituloSecao}>
+          Acesso rápido
+        </Text>
 
-      <TouchableOpacity
-        style={[styles.card, { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }]}
-        activeOpacity={0.7}
-        onPress={() => router.push('/explore')}
-      >
-        <Text style={styles.cardIcon}>⚙️</Text>
-        <View style={styles.cardTextContainer}>
-          <Text style={styles.cardTitle}>Orientações de uso</Text>
-          <Text style={styles.cardDescription}>Saiba como registrar e revisar uma avaliação com segurança.</Text>
+        <Text style={styles.subtituloSecao}>
+          Selecione uma funcionalidade para continuar.
+        </Text>
+
+        <View style={styles.grade}>
+          {atalhos.map(atalho => (
+            <TouchableOpacity
+              key={atalho.titulo}
+              accessibilityRole="button"
+              accessibilityLabel={atalho.titulo}
+              activeOpacity={0.75}
+              style={[
+                styles.card,
+                telaLarga && styles.cardLargo,
+              ]}
+              onPress={() => router.push(atalho.destino)}
+            >
+              <View style={styles.linhaCard}>
+                <View style={styles.caixaIcone}>
+                  <IconeInterface
+                    nome={atalho.icone}
+                    tamanho={28}
+                  />
+                </View>
+
+                <View style={styles.textosCard}>
+                  <Text style={styles.tituloCard}>
+                    {atalho.titulo}
+                  </Text>
+
+                  <Text style={styles.descricaoCard}>
+                    {atalho.descricao}
+                  </Text>
+                </View>
+
+                <IconeInterface
+                  nome="seta"
+                  tamanho={18}
+                  cor="#809bae"
+                />
+              </View>
+            </TouchableOpacity>
+          ))}
         </View>
-      </TouchableOpacity>
+
+        <Text style={styles.tituloSecao}>
+          Suporte ao profissional
+        </Text>
+
+        <TouchableOpacity
+          accessibilityRole="button"
+          style={styles.cardAjuda}
+          activeOpacity={0.75}
+          onPress={() => router.push('/explore')}
+        >
+          <View style={styles.caixaIcone}>
+            <IconeInterface nome="livro" tamanho={27} />
+          </View>
+
+          <View style={styles.textosCard}>
+            <Text style={styles.tituloCard}>
+              Orientações de uso
+            </Text>
+
+            <Text style={styles.descricaoCard}>
+              Saiba como registrar, fotografar e revisar
+              uma avaliação com segurança.
+            </Text>
+          </View>
+
+          <IconeInterface
+            nome="seta"
+            tamanho={18}
+            cor="#809bae"
+          />
+        </TouchableOpacity>
+
+        <View style={styles.aviso}>
+          <IconeInterface
+            nome="escudo"
+            tamanho={25}
+            cor="#005088"
+          />
+
+          <View style={styles.textosCard}>
+            <Text style={styles.tituloAviso}>
+              Apoio à avaliação profissional
+            </Text>
+
+            <Text style={styles.textoAviso}>
+              Os resultados das inteligências artificiais
+              exigem revisão profissional e não substituem
+              a avaliação clínica presencial.
+            </Text>
+          </View>
+        </View>
+
+        <Text style={styles.versao}>
+          Avalia & Trata • Versão 1.0
+        </Text>
+      </View>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 20, backgroundColor: '#f8fafc', flexGrow: 1 },
-  welcomeTitle: { fontSize: 22, fontWeight: 'bold', color: '#0056b3', marginBottom: 6 },
-  subtitle: { fontSize: 14, color: '#64748b', marginBottom: 20 },
-  card: { flexDirection: 'row', backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, padding: 16, marginBottom: 14, alignItems: 'center', elevation: 2 },
-  cardIcon: { fontSize: 32, marginRight: 16 },
-  cardTextContainer: { flex: 1 },
-  cardTitle: { fontSize: 16, fontWeight: 'bold', color: '#1e293b', marginBottom: 4 },
-  cardDescription: { fontSize: 13, color: '#64748b' },
+  tela: {
+    flex: 1,
+    backgroundColor: '#f5f7fa',
+  },
+
+  scroll: {
+    flexGrow: 1,
+    alignItems: 'center',
+  },
+
+  container: {
+    width: '100%',
+    maxWidth: 1120,
+    padding: 20,
+  },
+
+  cabecalho: {
+    backgroundColor: '#005088',
+    borderRadius: 16,
+    padding: 24,
+    marginBottom: 28,
+  },
+
+  marca: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 20,
+  },
+
+  logo: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#78a5c2',
+    backgroundColor: '#ffffff15',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  nomeSistema: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+
+  bemVindo: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#ffffff',
+    marginBottom: 8,
+  },
+
+  descricaoCabecalho: {
+    color: '#dce9f2',
+    fontSize: 14,
+    lineHeight: 22,
+    maxWidth: 620,
+  },
+
+  tituloSecao: {
+    color: '#172c3c',
+    fontSize: 19,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+
+  subtituloSecao: {
+    color: '#64748b',
+    fontSize: 14,
+    lineHeight: 21,
+    marginBottom: 16,
+  },
+
+  grade: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+
+  card: {
+    width: '100%',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbe4ec',
+    borderRadius: 12,
+    padding: 18,
+    marginBottom: 14,
+    minHeight: 110,
+    justifyContent: 'center',
+  },
+
+  cardLargo: {
+    width: '49%',
+    minHeight: 130,
+  },
+
+  linhaCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+
+  caixaIcone: {
+    width: 52,
+    height: 52,
+    borderRadius: 12,
+    backgroundColor: '#e5eff6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  textosCard: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  tituloCard: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#172c3c',
+    marginBottom: 6,
+  },
+
+  descricaoCard: {
+    fontSize: 13,
+    color: '#64748b',
+    lineHeight: 20,
+  },
+
+  cardAjuda: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbe4ec',
+    borderRadius: 12,
+    padding: 18,
+    marginTop: 10,
+    marginBottom: 20,
+  },
+
+  aviso: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    backgroundColor: '#eaf2f8',
+    borderWidth: 1,
+    borderColor: '#ccdfec',
+    borderRadius: 10,
+    padding: 16,
+    marginBottom: 20,
+  },
+
+  tituloAviso: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#005088',
+    marginBottom: 6,
+  },
+
+  textoAviso: {
+    color: '#475569',
+    fontSize: 13,
+    lineHeight: 20,
+  },
+
+  versao: {
+    textAlign: 'center',
+    fontSize: 12,
+    color: '#64748b',
+    marginVertical: 12,
+  },
 });
