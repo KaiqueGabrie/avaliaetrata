@@ -24,6 +24,7 @@ from models import (
     RelatorioIA,
 )
 
+from models import Paciente
 from routers.auth import obter_enfermeiro_atual
 
 from schemas.relatorio_persistente import (
@@ -56,6 +57,12 @@ def obter_analise_autorizada(
                 enfermeiro.id_enfermeiro
             ),
             Analise.deleted_at.is_(None),
+            Analise.id_paciente_fk.in_(select(Paciente.id_paciente)
+                .where(
+                    Paciente.id_enfermeiro_fk == enfermeiro.id_enfermeiro,
+                    Paciente.deleted_at.is_(None),
+                )
+            ),
         )
     )
 

@@ -1,4 +1,6 @@
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -133,11 +135,18 @@ def cadastrar_paciente(
 def listar_pacientes(
     db: Session = Depends(get_db),
     enfermeiro: Enfermeiro = Depends(obter_enfermeiro_atual),
+    arquivados: bool = False,
 ):
+    filtro = (
+        Paciente.deleted_at.is_not(None)
+        if arquivados
+        else Paciente.deleted_at.is_(None)
+    )
+
     return db.scalars(
         select(Paciente).where(
             Paciente.id_enfermeiro_fk == enfermeiro.id_enfermeiro,
-            Paciente.deleted_at.is_(None),
+            filtro,
         ).order_by(Paciente.nome_completo)
     ).all()
 
@@ -333,3 +342,83 @@ def atualizar_anamnese(
     db.refresh(anamnese)
 
     return anamnese
+
+
+# ==========================================
+# ARQUIVAMENTO E RESTAURACAO
+# ==========================================
+
+def alterar_arquivamento(
+    paciente_id: int,
+    arquivar: bool,
+    db: Session,
+    enfermeiro: Enfermeiro,
+):
+    paciente = db.scalar(
+        select(Paciente).where(
+            Paciente.id_paciente == paciente_id,
+            Paciente.id_enfermeiro_fk == enfermeiro.id_enfermeiro,
+        ).with_for_update()
+    )
+
+    if paciente is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Paciente nao encontrado.",
+        )
+
+    atualmente_arquivado = paciente.deleted_at is not None
+
+    if atualmente_arquivado != arquivar:
+        paciente.deleted_at = (
+            datetime.now(timezone.utc).replace(tzinfo=None)
+            if arquivar
+            else None
+        )
+
+        registrar_log(
+            db,
+            enfermeiro.id_enfermeiro,
+            (
+                "ARQUIVAMENTO_PACIENTE"
+                if arquivar
+                else "RESTAURACAO_PACIENTE"
+            ),
+            "paciente",
+            paciente_id,
+        )
+
+    salvar_alteracoes(db)
+
+    return {
+        "id_paciente": paciente_id,
+        "arquivado": arquivar,
+    }
+
+
+@router.post("/{paciente_id}/arquivar")
+def arquivar_paciente(
+    paciente_id: int,
+    db: Session = Depends(get_db),
+    enfermeiro: Enfermeiro = Depends(obter_enfermeiro_atual),
+):
+    return alterar_arquivamento(
+        paciente_id,
+        True,
+        db,
+        enfermeiro,
+    )
+
+
+@router.post("/{paciente_id}/restaurar")
+def restaurar_paciente(
+    paciente_id: int,
+    db: Session = Depends(get_db),
+    enfermeiro: Enfermeiro = Depends(obter_enfermeiro_atual),
+):
+    return alterar_arquivamento(
+        paciente_id,
+        False,
+        db,
+        enfermeiro,
+    )

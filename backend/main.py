@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Analise, Enfermeiro, Imagem, RelatorioIA
+from models import Paciente
 from routers.auth import router as auth_router, obter_enfermeiro_atual
 from routers.pacientes import router as pacientes_router
 from routers.consentimento import router as consentimento_router
@@ -147,6 +148,12 @@ def obter_analise_autorizada(
             Analise.id_analise == analise_id,
             Analise.id_enfermeiro_fk == enfermeiro.id_enfermeiro,
             Analise.deleted_at.is_(None),
+            Analise.id_paciente_fk.in_(select(Paciente.id_paciente)
+                .where(
+                    Paciente.id_enfermeiro_fk == enfermeiro.id_enfermeiro,
+                    Paciente.deleted_at.is_(None),
+                )
+            ),
         )
     )
     if analise is None:

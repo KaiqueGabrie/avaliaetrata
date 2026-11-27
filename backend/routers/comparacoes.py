@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from database import Base, get_db
 from models import Analise, Enfermeiro
+from models import Paciente
 from routers.auth import obter_enfermeiro_atual
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,12 @@ def verificar_acesso(analise_id: int, db: Session, enfermeiro: Enfermeiro) -> No
         Analise.id_analise == analise_id,
         Analise.id_enfermeiro_fk == enfermeiro.id_enfermeiro,
         Analise.deleted_at.is_(None),
+        Analise.id_paciente_fk.in_(select(Paciente.id_paciente)
+            .where(
+                Paciente.id_enfermeiro_fk == enfermeiro.id_enfermeiro,
+                Paciente.deleted_at.is_(None),
+            )
+        ),
     ))
     if analise is None:
         raise HTTPException(status_code=404, detail="Analise nao encontrada ou acesso nao autorizado.")
