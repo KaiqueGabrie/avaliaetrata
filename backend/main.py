@@ -19,12 +19,13 @@ from database import get_db
 from models import Analise, Enfermeiro, Imagem, RelatorioIA
 from models import Paciente
 from routers.auth import router as auth_router, obter_enfermeiro_atual
-from routers.pacientes import router as pacientes_router
+from routers.pacientes import router as pacientes_router, obter_anamnese_ativa
 from routers.consentimento import router as consentimento_router
 from routers.analises import router as analises_router
 from routers.relatorios_persistentes import router as relatorios_persistentes_router
 from routers.comparacoes import router as comparacoes_router, salvar_comparacao
 from routers.marcacoes import router as marcacoes_router
+from services.contexto_anamnese import montar_contexto_anamnese
 from schemas.multimodal import (
     AnaliseMultimodalInput,
     AnaliseTecnicaOpenCVInput,
@@ -357,11 +358,20 @@ def executar_analise_multimodal(
     queixaPrincipal: str = Form(""),
     observacoes: str = Form(""),
     provedor: Literal["gemini", "openai", "kimi", "todos"] = Form("gemini"),
+    incluir_anamnese: bool = Form(False),
+    confirmar_envio_ia: bool = Form(False),
     db: Session = Depends(get_db),
     enfermeiro: Enfermeiro = Depends(obter_enfermeiro_atual),
     pasta_temporaria: Path = Depends(obter_pasta_temporaria),
 ):
-    obter_analise_autorizada(analise_id, enfermeiro, db)
+    analise = obter_analise_autorizada(analise_id, enfermeiro, db)
+
+    if incluir_anamnese is True and confirmar_envio_ia is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Confirme o envio do contexto clinico aos provedores.",
+        )
+
     imagem = obter_imagem_analise(analise_id, db)
     caminho_original = resolver_caminho_imagem(
         imagem.caminho_imagem_original, pasta_temporaria
@@ -383,6 +393,26 @@ def executar_analise_multimodal(
             status_code=400,
             detail=erro.errors(include_url=False, include_context=False),
         ) from erro
+
+    contexto_anamnese = None
+
+    if incluir_anamnese is True:
+        anamnese = obter_anamnese_ativa(
+            db,
+            analise.id_paciente_fk,
+        )
+
+        contexto_anamnese = montar_contexto_anamnese(
+            anamnese
+        )
+
+        if contexto_anamnese is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Anamnese indisponivel ou sem dados estruturados.",
+            )
+
+        dados_clinicos.anamnese_contexto = contexto_anamnese
 
     mapa_provedores = {
         "gemini": ["gemini"],
@@ -427,6 +457,26 @@ def executar_analise_multimodal(
             status_code=400,
             detail="Dados de entrada multimodal invalidos.",
         ) from erro
+
+    # Preserva o contexto efetivamente utilizado nesta tentativa.
+    if contexto_anamnese is not None:
+        contexto_atual = dict(
+            analise.contexto_clinico_json or {}
+        )
+
+        registros = dict(
+            contexto_atual.get("contextos_anamnese_ia") or {}
+        )
+
+        registros[avaliacao_id] = {
+            "dados": contexto_anamnese.model_dump(mode="json"),
+            "provedores": provedores_desejados,
+        }
+
+        contexto_atual["contextos_anamnese_ia"] = registros
+        analise.contexto_clinico_json = contexto_atual
+
+        db.commit()
 
     try:
         resultado = orquestrador_multimodal.executar_analise_comparativa(

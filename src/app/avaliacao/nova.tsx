@@ -1,6 +1,7 @@
 import RotuloComAjuda from '../../components/rotulo-com-ajuda';
+import IconeInterface from '../../components/icone-interface';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -29,6 +30,32 @@ import type { ResultadoProvedorIA } from '../../types/ia';
 import { Aviso } from '../../utils/avisos';
 
 type Etapa = 'clinica' | 'foto' | 'processando' | 'resultados' | 'revisao';
+
+type AnamneseContexto = {
+  tabagismo: boolean | null;
+  mobilidade_reduzida: boolean | null;
+  possui_varizes: boolean | null;
+  historico_amputacao: boolean | null;
+  pulsos_perifericos: string | null;
+};
+
+function respostaAnamnese(valor: boolean | null | undefined) {
+  if (valor === true) return 'Sim';
+  if (valor === false) return 'Não';
+  return 'Não informado';
+}
+
+function validarMedida(valor: string) {
+  if (!valor.trim()) return true;
+
+  const normalizado = valor.trim().replace(',', '.');
+
+  return (
+    /^\d+(\.\d+)?$/.test(normalizado) &&
+    Number.isFinite(Number(normalizado)) &&
+    Number(normalizado) > 0
+  );
+}
 
 type Provedor = 'gemini' | 'openai' | 'kimi' | 'todos';
 
@@ -101,6 +128,18 @@ export default function NovaAvaliacaoScreen() {
 
   const solicitacaoEmAndamento = useRef(false);
   const [etapa, setEtapa] = useState<Etapa>('clinica');
+
+  const [anamnese, setAnamnese] =
+    useState<AnamneseContexto | null>(null);
+
+  const [carregandoAnamnese, setCarregandoAnamnese] =
+    useState(true);
+
+  const [incluirAnamnese, setIncluirAnamnese] =
+    useState(false);
+
+  const [confirmouEnvio, setConfirmouEnvio] =
+    useState(false);
   const [comparacaoAberta, setComparacaoAberta] = useState(false);
   const [avaliacaoIniciada, setAvaliacaoIniciada] = useState<number | null>(null);
   const [localizacao, setLocalizacao] = useState('');
@@ -126,6 +165,69 @@ export default function NovaAvaliacaoScreen() {
   const [gerandoMarcacoes, setGerandoMarcacoes] = useState(false);
   const [reprocessandoOpenAI, setReprocessandoOpenAI] = useState(false);
 
+  useEffect(() => {
+    const requisicao = new AbortController();
+
+    setAnamnese(null);
+    setIncluirAnamnese(false);
+    setConfirmouEnvio(false);
+    setCarregandoAnamnese(true);
+
+    async function carregarAnamnese() {
+      try {
+        if (
+          typeof pacienteId !== 'string' ||
+          !/^\d+$/.test(pacienteId)
+        ) return;
+
+        const dados = await apiJson<AnamneseContexto>(
+          '/pacientes/' + pacienteId + '/anamnese',
+          {
+            signal: requisicao.signal,
+            cache: 'no-store',
+          },
+        );
+
+        if (!requisicao.signal.aborted) {
+          setAnamnese({
+            tabagismo: dados.tabagismo ?? null,
+            mobilidade_reduzida:
+              dados.mobilidade_reduzida ?? null,
+            possui_varizes: dados.possui_varizes ?? null,
+            historico_amputacao:
+              dados.historico_amputacao ?? null,
+            pulsos_perifericos:
+              dados.pulsos_perifericos ?? null,
+          });
+        }
+      } catch {
+        if (!requisicao.signal.aborted) {
+          setAnamnese(null);
+        }
+      } finally {
+        if (!requisicao.signal.aborted) {
+          setCarregandoAnamnese(false);
+        }
+      }
+    }
+
+    void carregarAnamnese();
+
+    return () => requisicao.abort();
+  }, [pacienteId]);
+
+  const temContextoAnamnese = Boolean(
+    anamnese && (
+      anamnese.tabagismo !== null ||
+      anamnese.mobilidade_reduzida !== null ||
+      anamnese.possui_varizes !== null ||
+      anamnese.historico_amputacao !== null ||
+      ['presentes', 'diminuidos', 'ausentes'].includes(
+        anamnese.pulsos_perifericos || '',
+      )
+    ),
+  );
+
   const resultados = resultado?.analise_multimodal?.resultados || {};
 
   const limpar = () => {
@@ -139,10 +241,104 @@ export default function NovaAvaliacaoScreen() {
   const selecionarImagem = async (camera: boolean) => {
     try {
       if (Platform.OS === 'web' && camera) {
-        Aviso.alert(
-          'Câmera',
-          'No navegador, selecione a fotografia usando a opção da galeria.'
-        );
+        const input = document.createElement('input');
+
+        input.type = 'file';
+
+        input.accept =
+          'image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp';
+
+        input.setAttribute('capture', 'environment');
+
+        input.onchange = () => {
+          const arquivo = input.files?.[0];
+
+          if (!arquivo) return;
+
+          if (
+            arquivo.size === 0 ||
+            arquivo.size > 15 * 1024 * 1024
+          ) {
+            Aviso.alert(
+              'Fotografia inválida',
+              'Selecione uma fotografia de até 15 MB.',
+            );
+            return;
+          }
+
+          const extensao =
+            arquivo.name.toLowerCase().split('.').pop();
+
+          const tipo =
+            arquivo.type === 'image/jpg'
+              ? 'image/jpeg'
+              : arquivo.type || (
+                extensao === 'png'
+                  ? 'image/png'
+                  : extensao === 'webp'
+                    ? 'image/webp'
+                    : ['jpg', 'jpeg'].includes(extensao || '')
+                      ? 'image/jpeg'
+                      : ''
+              );
+
+          if (
+            !['image/jpeg', 'image/png', 'image/webp'].includes(tipo)
+          ) {
+            Aviso.alert(
+              'Formato não suportado',
+              'Utilize JPG, PNG ou WEBP.',
+            );
+            return;
+          }
+
+          const leitor = new FileReader();
+
+          leitor.onerror = () => {
+            Aviso.alert(
+              'Erro na fotografia',
+              'Não foi possível ler a imagem.',
+            );
+          };
+
+          leitor.onload = () => {
+            if (typeof leitor.result !== 'string') return;
+
+            const uri = leitor.result;
+            const visualizacao = new window.Image();
+
+            visualizacao.onerror = () => {
+              Aviso.alert(
+                'Fotografia inválida',
+                'Não foi possível visualizar a imagem.',
+              );
+            };
+
+            visualizacao.onload = () => {
+              setImagemUri(uri);
+
+              setImagemAsset({
+                uri,
+                width: visualizacao.naturalWidth,
+                height: visualizacao.naturalHeight,
+                fileName: arquivo.name,
+                fileSize: arquivo.size,
+                mimeType: tipo,
+                file: arquivo,
+                type: 'image',
+              });
+
+              setConfirmouEnvio(false);
+              limpar();
+            };
+
+            visualizacao.src = uri;
+          };
+
+          leitor.readAsDataURL(arquivo);
+        };
+
+        input.click();
         return;
       }
 
@@ -160,18 +356,58 @@ export default function NovaAvaliacaoScreen() {
       const selecao = camera
         ? await ImagePicker.launchCameraAsync({
             mediaTypes: ['images'],
-            quality: 0.8,
-            allowsEditing: true,
+            quality: 1,
+            allowsEditing: false,
           })
         : await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ['images'],
-            quality: 0.8,
-            allowsEditing: true,
+            quality: 1,
+            allowsEditing: false,
           });
 
       if (!selecao.canceled && selecao.assets[0]?.uri) {
-        setImagemUri(selecao.assets[0].uri);
-        setImagemAsset(selecao.assets[0]);
+        const asset = selecao.assets[0];
+
+        const tamanho =
+          asset.fileSize ?? asset.file?.size ?? 0;
+
+        if (tamanho > 15 * 1024 * 1024) {
+          Aviso.alert(
+            'Fotografia muito grande',
+            'Selecione uma fotografia de até 15 MB.',
+          );
+          return;
+        }
+
+        const mime =
+          asset.mimeType || asset.file?.type || '';
+
+        if (
+          mime &&
+          ![
+            'image/jpeg',
+            'image/jpg',
+            'image/png',
+            'image/webp',
+          ].includes(mime)
+        ) {
+          Aviso.alert(
+            'Formato não suportado',
+            'Utilize JPG, PNG ou WEBP.',
+          );
+          return;
+        }
+
+        setImagemUri(asset.uri);
+        setImagemAsset({
+          ...asset,
+          mimeType:
+            mime === 'image/jpg'
+              ? 'image/jpeg'
+              : mime || asset.mimeType,
+        });
+
+        setConfirmouEnvio(false);
         limpar();
       }
     } catch (erro) {
@@ -210,6 +446,22 @@ export default function NovaAvaliacaoScreen() {
       )
     ) {
       Aviso.alert('Dor inválida', 'Informe um valor entre 0 e 10.');
+      return;
+    }
+
+    if (!confirmouEnvio) {
+      Aviso.alert(
+        'Confirmação necessária',
+        'Confirme que o envio da fotografia e dos dados clínicos aos serviços de IA está autorizado.',
+      );
+      return;
+    }
+
+    if (!validarMedida(comprimento) || !validarMedida(largura)) {
+      Aviso.alert(
+        'Medidas inválidas',
+        'Informe medidas positivas em centímetros.',
+      );
       return;
     }
 
@@ -340,6 +592,18 @@ export default function NovaAvaliacaoScreen() {
       formulario.append('queixaPrincipal', queixaPrincipal.trim());
       formulario.append('observacoes', observacoes.trim());
       formulario.append('provedor', provedor);
+
+      formulario.append(
+        'incluir_anamnese',
+        incluirAnamnese && temContextoAnamnese
+          ? 'true'
+          : 'false',
+      );
+
+      formulario.append(
+        'confirmar_envio_ia',
+        confirmouEnvio ? 'true' : 'false',
+      );
 
       const urlAnalise =
         `${API_URL}/analises/${analiseId}/executar-multimodal`;
@@ -589,6 +853,15 @@ export default function NovaAvaliacaoScreen() {
       Aviso.alert('Dor inválida', 'Informe um valor entre 0 e 10.');
       return;
     }
+    if (!validarMedida(comprimento) || !validarMedida(largura)) {
+      Aviso.alert(
+        'Medidas inválidas',
+        'Informe medidas positivas em centímetros.',
+      );
+      return;
+    }
+
+    setConfirmouEnvio(false);
     setStatusApi('');
     setEtapa('foto');
   };
@@ -647,11 +920,160 @@ export default function NovaAvaliacaoScreen() {
       contentContainerStyle={styles.container}
       keyboardShouldPersistTaps="handled"
     >
+      <View style={styles.progressoEtapas}>
+        {([
+          { valor: 'clinica', texto: 'Clínica' },
+          { valor: 'foto', texto: 'Fotografia' },
+          { valor: 'processando', texto: 'Análise' },
+          { valor: 'resultados', texto: 'Resultados' },
+          { valor: 'revisao', texto: 'Revisão' },
+        ] as const).map((item, indice, lista) => {
+          const atual = lista.findIndex(
+            elemento => elemento.valor === etapa,
+          );
+
+          const concluida = indice < atual;
+          const ativa = indice === atual;
+
+          return (
+            <View
+              key={item.valor}
+              style={styles.itemEtapa}
+            >
+              <View style={[
+                styles.numeroEtapa,
+                concluida && styles.etapaConcluida,
+                ativa && styles.etapaAtiva,
+              ]}>
+                {concluida ? (
+                  <IconeInterface
+                    nome="confirmar"
+                    tamanho={17}
+                    cor="#ffffff"
+                  />
+                ) : (
+                  <Text style={[
+                    styles.textoNumeroEtapa,
+                    ativa && { color: '#ffffff' },
+                  ]}>
+                    {indice + 1}
+                  </Text>
+                )}
+              </View>
+
+              <Text style={[
+                styles.nomeEtapa,
+                ativa && { color: '#005088', fontWeight: '700' },
+              ]}>
+                {item.texto}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+
       <Text style={styles.titulo}>{tituloDaEtapa[etapa]}</Text>
       <Text style={styles.textoMenor}>Prontuário nº {pacienteId || 'Não selecionado'}</Text>
 
       {etapa === 'clinica' ? (
         <>
+          <View style={styles.cardAnamnese}>
+            <View style={styles.linhaTitulo04}>
+              <IconeInterface nome="arquivo" tamanho={23} />
+
+              <Text style={styles.subtitulo}>
+                Anamnese de admissão
+              </Text>
+            </View>
+
+            {carregandoAnamnese ? (
+              <ActivityIndicator color="#005088" />
+            ) : anamnese && temContextoAnamnese ? (
+              <>
+                <Text style={styles.textoMenor}>
+                  Dados previamente registrados pelo profissional.
+                </Text>
+
+                {[
+                  {
+                    titulo: 'Tabagismo',
+                    valor: respostaAnamnese(anamnese.tabagismo),
+                  },
+                  {
+                    titulo: 'Mobilidade reduzida',
+                    valor: respostaAnamnese(anamnese.mobilidade_reduzida),
+                  },
+                  {
+                    titulo: 'Varizes',
+                    valor: respostaAnamnese(anamnese.possui_varizes),
+                  },
+                  {
+                    titulo: 'Histórico de amputação',
+                    valor: respostaAnamnese(anamnese.historico_amputacao),
+                  },
+                  {
+                    titulo: 'Pulsos periféricos',
+                    valor: ({
+                      presentes: 'Presentes',
+                      diminuidos: 'Diminuídos',
+                      ausentes: 'Ausentes',
+                    } as Record<string, string>)[
+                      anamnese.pulsos_perifericos || ''
+                    ] || 'Não informado',
+                  },
+                ].map(item => (
+                  <View
+                    key={item.titulo}
+                    style={styles.linhaAnamnese}
+                  >
+                    <Text style={[styles.texto, { flex: 1 }]}>
+                      {item.titulo}
+                    </Text>
+
+                    <Text style={styles.textoMenor}>
+                      {item.valor}
+                    </Text>
+                  </View>
+                ))}
+
+                <TouchableOpacity
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: incluirAnamnese }}
+                  style={styles.confirmacao04}
+                  onPress={() => setIncluirAnamnese(v => !v)}
+                >
+                  <View style={[
+                    styles.checkbox04,
+                    incluirAnamnese && styles.checkboxAtivo04,
+                  ]}>
+                    {incluirAnamnese ? (
+                      <IconeInterface
+                        nome="confirmar"
+                        tamanho={17}
+                        cor="#ffffff"
+                      />
+                    ) : null}
+                  </View>
+
+                  <Text style={[styles.texto, { flex: 1 }]}>
+                    Utilizar esses dados como contexto da análise.
+                  </Text>
+                </TouchableOpacity>
+
+                <Text style={styles.textoMenor}>
+                  Somente os campos estruturados acima serão
+                  acrescentados. Informações desconhecidas
+                  permanecem como não informadas.
+                </Text>
+              </>
+            ) : (
+              <Text style={styles.textoMenor}>
+                Nenhum contexto estruturado disponível.
+                A avaliação pode continuar sem a anamnese.
+              </Text>
+            )}
+          </View>
+
           <Campo
             titulo="Localização anatômica *"
             valor={localizacao}
@@ -742,15 +1164,53 @@ export default function NovaAvaliacaoScreen() {
             />
           ) : null}
 
-          {Platform.OS !== 'web' ? (
+          <View style={styles.acoesFoto04}>
             <TouchableOpacity
               accessibilityRole="button"
-              style={styles.botaoCinza}
+              style={styles.botaoFoto04}
               onPress={() => selecionarImagem(true)}
             >
-              <Text style={styles.botaoTexto}>Tirar fotografia</Text>
+              <IconeInterface nome="camera" tamanho={26} />
+
+              <Text style={styles.textoFoto04}>
+                Tirar fotografia
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              accessibilityRole="button"
+              style={styles.botaoFoto04}
+              onPress={() => selecionarImagem(false)}
+            >
+              <IconeInterface nome="imagem" tamanho={26} />
+
+              <Text style={styles.textoFoto04}>
+                Selecionar da galeria
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {imagemUri ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              onPress={() => {
+                setImagemUri(null);
+                setImagemAsset(null);
+                setConfirmouEnvio(false);
+                limpar();
+              }}
+            >
+              <Text style={styles.link}>
+                Remover fotografia selecionada
+              </Text>
             </TouchableOpacity>
           ) : null}
+
+          <Text style={styles.textoMenor}>
+            Formatos aceitos: JPG, PNG e WEBP, até 15 MB.
+            No navegador, a disponibilidade da câmera
+            depende do dispositivo.
+          </Text>
 
           <RotuloComAjuda titulo="Como fotografar" />
           <TouchableOpacity
@@ -762,14 +1222,24 @@ export default function NovaAvaliacaoScreen() {
           </TouchableOpacity>
 
           <Text style={styles.subtitulo}>Modelos da análise</Text>
+
+          <View style={styles.gradeModelos04}>
           {PROVEDORES.map(item => (
             <TouchableOpacity
               key={item.valor}
               style={[
                 styles.opcao,
+                { flexBasis: '45%', minHeight: 48 },
                 provedor === item.valor && styles.opcaoAtiva,
               ]}
-              onPress={() => setProvedor(item.valor)}
+              accessibilityRole="radio"
+              accessibilityState={{
+                checked: provedor === item.valor,
+              }}
+              onPress={() => {
+                setProvedor(item.valor);
+                setConfirmouEnvio(false);
+              }}
               disabled={carregando}
             >
               <Text style={styles.texto}>
@@ -777,13 +1247,60 @@ export default function NovaAvaliacaoScreen() {
               </Text>
             </TouchableOpacity>
           ))}
+          </View>
+
+          <View style={styles.cardAnamnese}>
+            <View style={styles.linhaTitulo04}>
+              <IconeInterface nome="escudo" tamanho={23} />
+
+              <Text style={styles.subtitulo}>
+                Privacidade e autorização
+              </Text>
+            </View>
+
+            <Text style={styles.texto}>
+              A fotografia e os dados clínicos serão
+              processados pelos serviços de IA selecionados.
+              Não inclua nomes, CPF ou outros identificadores
+              desnecessários nos campos de texto ou na imagem.
+            </Text>
+
+            <TouchableOpacity
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: confirmouEnvio }}
+              style={styles.confirmacao04}
+              onPress={() => setConfirmouEnvio(v => !v)}
+            >
+              <View style={[
+                styles.checkbox04,
+                confirmouEnvio && styles.checkboxAtivo04,
+              ]}>
+                {confirmouEnvio ? (
+                  <IconeInterface
+                    nome="confirmar"
+                    tamanho={17}
+                    cor="#ffffff"
+                  />
+                ) : null}
+              </View>
+
+              <Text style={[styles.texto, { flex: 1 }]}>
+                Confirmo que este envio está autorizado
+                conforme as orientações institucionais.
+              </Text>
+            </TouchableOpacity>
+          </View>
 
           {statusApi ? <Text style={styles.status}>{statusApi}</Text> : null}
           <TouchableOpacity
             accessibilityRole="button"
-            style={[styles.botao, !imagemUri && styles.desabilitado]}
+            style={[
+              styles.botao,
+              (!imagemUri || !confirmouEnvio || carregando) &&
+                styles.desabilitado,
+            ]}
             onPress={analisar}
-            disabled={!imagemUri || carregando}
+            disabled={!imagemUri || !confirmouEnvio || carregando}
           >
             <Text style={styles.botaoTexto}>Analisar fotografia</Text>
           </TouchableOpacity>
@@ -793,7 +1310,61 @@ export default function NovaAvaliacaoScreen() {
       {etapa === 'processando' ? (
         <View style={styles.processando} accessibilityLiveRegion="polite">
           <ActivityIndicator size="large" color="#005088" />
-          <Text style={styles.subtitulo}>{statusApi || 'Preparando a avaliação…'}</Text>
+
+          <Text style={styles.subtitulo}>
+            Processando avaliação
+          </Text>
+
+          <View style={styles.cardProcessamento04}>
+            {[
+              'Registrando avaliação',
+              'Registrando fotografia',
+              'Analisando com as IAs selecionadas',
+            ].map((texto, indice) => {
+              const fase =
+                Number(statusApi.match(/^([123])\/3/)?.[1] || '1');
+
+              const concluida = indice + 1 < fase;
+              const atual = indice + 1 === fase;
+
+              return (
+                <View
+                  key={texto}
+                  style={styles.linhaProcessamento04}
+                >
+                  {concluida ? (
+                    <IconeInterface
+                      nome="confirmar"
+                      tamanho={23}
+                      cor="#15803d"
+                    />
+                  ) : atual ? (
+                    <ActivityIndicator color="#005088" />
+                  ) : (
+                    <View style={styles.pendente04} />
+                  )}
+
+                  <Text style={[
+                    styles.texto,
+                    atual && {
+                      color: '#005088',
+                      fontWeight: '700',
+                    },
+                  ]}>
+                    {texto}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+
+          <Text style={styles.textoMenor}>
+            {statusApi || 'Preparando a avaliação…'}
+          </Text>
+
+          <Text style={styles.textoMenor}>
+            Mantenha esta tela aberta durante o processamento.
+          </Text>
         </View>
       ) : null}
 
@@ -1000,7 +1571,165 @@ export default function NovaAvaliacaoScreen() {
 }
 
 const styles = StyleSheet.create({
-  pagina: { flex: 1, backgroundColor: '#fff' },
+  progressoEtapas: {
+    flexDirection: 'row',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbe4ec',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 5,
+    marginTop: 6,
+    marginBottom: 12,
+  },
+
+  itemEtapa: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'center',
+    gap: 6,
+  },
+
+  numeroEtapa: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#e2e8f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  etapaAtiva: {
+    backgroundColor: '#005088',
+  },
+
+  etapaConcluida: {
+    backgroundColor: '#15803d',
+  },
+
+  textoNumeroEtapa: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  nomeEtapa: {
+    fontSize: 10,
+    color: '#64748b',
+    textAlign: 'center',
+  },
+
+  cardAnamnese: {
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#ccdfec',
+    borderRadius: 12,
+    backgroundColor: '#eaf2f8',
+    marginVertical: 14,
+  },
+
+  linhaTitulo04: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    marginBottom: 8,
+  },
+
+  linhaAnamnese: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingVertical: 6,
+  },
+
+  confirmacao04: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#ccdfec',
+    paddingTop: 14,
+    marginTop: 12,
+    marginBottom: 9,
+  },
+
+  checkbox04: {
+    width: 23,
+    height: 23,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: '#809bae',
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  checkboxAtivo04: {
+    backgroundColor: '#005088',
+    borderColor: '#005088',
+  },
+
+  acoesFoto04: {
+    flexDirection: 'row',
+    gap: 10,
+    marginVertical: 12,
+  },
+
+  botaoFoto04: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 90,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#b7c9d5',
+    borderRadius: 12,
+    backgroundColor: '#f5f9fc',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+
+  textoFoto04: {
+    color: '#005088',
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+
+  gradeModelos04: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+
+  cardProcessamento04: {
+    width: '100%',
+    maxWidth: 460,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbe4ec',
+    borderRadius: 14,
+    padding: 20,
+  },
+
+  linhaProcessamento04: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    minHeight: 48,
+  },
+
+  pendente04: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+  },
+
+  pagina: { flex: 1, backgroundColor: '#f5f7fa' },
   container: {
     width: '100%',
     maxWidth: 920,
@@ -1051,7 +1780,7 @@ const styles = StyleSheet.create({
     marginBottom: 5,
   },
   input: {
-    backgroundColor: '#dce6ed',
+    backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#809BAE',
     borderRadius: 8,
@@ -1074,6 +1803,7 @@ const styles = StyleSheet.create({
   },
   opcao: {
     flex: 1,
+    minWidth: 0,
     padding: 12,
     borderRadius: 8,
     borderWidth: 1,

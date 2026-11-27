@@ -16,6 +16,18 @@ class SchemaBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class AnamneseContextoIA(SchemaBase):
+    """Dados estruturados previamente registrados pelo profissional."""
+
+    tabagismo: Optional[bool] = None
+    mobilidade_reduzida: Optional[bool] = None
+    possui_varizes: Optional[bool] = None
+    historico_amputacao: Optional[bool] = None
+    pulsos_perifericos: Optional[Literal[
+        "presentes", "diminuidos", "ausentes"
+    ]] = None
+
+
 class DadosClinicosInput(SchemaBase):
     """Informações fornecidas pelo profissional, não inferidas da foto."""
 
@@ -27,6 +39,7 @@ class DadosClinicosInput(SchemaBase):
     nivelDor: Optional[str] = None
     queixaPrincipal: Optional[str] = None
     observacoes: Optional[str] = None
+    anamnese_contexto: Optional[AnamneseContextoIA] = None
 
 
 class AnaliseTecnicaOpenCVInput(SchemaBase):
