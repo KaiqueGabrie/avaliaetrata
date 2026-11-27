@@ -53,6 +53,33 @@ type Comparacao = {
   };
 };
 
+type DisponibilidadeIA = {
+  provedor: 'openai' | 'gemini' | 'kimi';
+  estado: string;
+  pode_recuperar: boolean;
+  contexto_reconstruido: boolean;
+};
+
+const nomesProvedores05: Record<string, string> = {
+  openai: 'OpenAI',
+  gemini: 'Gemini',
+  kimi: 'Kimi',
+};
+
+const estadosProvedores05: Record<string, string> = {
+  disponivel: 'Relatório disponível',
+  timeout: 'Tempo limite excedido',
+  falha: 'Falha no processamento',
+  sem_relatorio: 'Relatório não registrado',
+  indisponivel: 'Sem resultado registrado',
+};
+
+const situacoesTimes05: Record<string, string> = {
+  concordante_parcial: 'Concordância parcial',
+  divergente: 'Divergente',
+  inconclusiva: 'Inconclusiva',
+};
+
 type RespostaMarcacoes = {
   marcacoes_por_ia: ImagensAvaliacao['marcacoes_por_ia'];
 };
@@ -77,6 +104,14 @@ export default function DetalheAvaliacaoScreen() {
   const [verOriginal, setVerOriginal] = useState(false);
   const [erro, setErro] = useState('');
 
+  const recuperacaoEmAndamento = useRef(false);
+
+  const [disponibilidadeIA, setDisponibilidadeIA] =
+    useState<DisponibilidadeIA[]>([]);
+
+  const [recuperandoIA, setRecuperandoIA] =
+    useState<string | null>(null);
+
   const carregar = useCallback(async () => {
     if (!id || !/^\d+$/.test(id)) {
       setErro('Avaliação inválida.');
@@ -86,6 +121,7 @@ export default function DetalheAvaliacaoScreen() {
 
     setCarregando(true);
     setErro('');
+    setDisponibilidadeIA([]);
 
     try {
       const [respostaRelatorios, respostaComparacoes, fotos, marcacoes] =
@@ -123,6 +159,17 @@ export default function DetalheAvaliacaoScreen() {
           setDescricao(inicial.conteudo_editavel?.conteudo_descricao || '');
         }
       }
+
+      const disponibilidade = await apiJson<{
+        provedores: DisponibilidadeIA[];
+      }>(
+        '/analises/' + id + '/disponibilidade-ias',
+        { cache: 'no-store' },
+      ).catch(() => null);
+
+      setDisponibilidadeIA(
+        disponibilidade?.provedores || [],
+      );
 
       const primeiraComparacao = respostaComparacoes.comparacoes?.[0];
 
@@ -235,6 +282,93 @@ export default function DetalheAvaliacaoScreen() {
     }
   };
 
+  const recuperarRelatorioIA = (
+    item: DisponibilidadeIA,
+  ) => {
+    if (
+      !id ||
+      !item.pode_recuperar ||
+      recuperacaoEmAndamento.current
+    ) return;
+
+    const nome =
+      nomesProvedores05[item.provedor] ||
+      item.provedor;
+
+    Aviso.alert(
+      'Recuperar relatório — ' + nome,
+      'A fotografia e o contexto clínico serão enviados novamente somente para ' +
+        nome +
+        '. Os relatórios existentes serão preservados. ' +
+        'Salve eventuais edições antes de continuar.' +
+        (
+          item.contexto_reconstruido
+            ? ' Os dados clínicos serão reconstruídos a partir do registro salvo.'
+            : ''
+        ),
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Confirmar envio',
+          onPress: async () => {
+            if (recuperacaoEmAndamento.current) return;
+
+            recuperacaoEmAndamento.current = true;
+            setRecuperandoIA(item.provedor);
+
+            try {
+              const resposta = await apiJson<{
+                sucesso: boolean;
+                estado: string;
+                comparacao_atualizada?: boolean;
+              }>(
+                '/analises/' + id +
+                  '/reprocessar/' + item.provedor +
+                  '?confirmar_envio=true',
+                { method: 'POST' },
+              );
+
+              await carregar();
+
+              if (resposta.sucesso) {
+                Aviso.alert(
+                  'Relatório recuperado',
+                  nome +
+                    ' concluiu a análise. Os relatórios anteriores foram preservados. ' +
+                    (
+                      resposta.comparacao_atualizada
+                        ? 'A comparação foi atualizada.'
+                        : 'A comparação ainda não foi atualizada.'
+                    ) +
+                    ' Confira as marcações e realize a revisão profissional.',
+                );
+              } else {
+                Aviso.alert(
+                  'Análise indisponível',
+                  estadosProvedores05[resposta.estado] ||
+                    'Não foi possível recuperar o relatório.',
+                );
+              }
+
+            } catch (e) {
+              await carregar();
+
+              Aviso.alert(
+                'Recuperação',
+                e instanceof Error
+                  ? e.message
+                  : 'Não foi possível recuperar a análise.',
+              );
+            } finally {
+              recuperacaoEmAndamento.current = false;
+              setRecuperandoIA(null);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const selecionar = (relatorio: Relatorio) => {
     setSelecionado(relatorio.provedor);
     setVerOriginal(false);
@@ -341,7 +475,96 @@ export default function DetalheAvaliacaoScreen() {
       {carregando ? <ActivityIndicator color="#0056b3" size="large" /> : null}
       {erro ? <Text style={styles.erro}>{erro}</Text> : null}
 
-      {!carregando && relatorios.length > 0 ? (
+      {!carregando && !erro && disponibilidadeIA.length > 0 ? (
+        <View style={styles.card}>
+          <Text style={styles.secao}>
+            Disponibilidade das análises
+          </Text>
+
+          <Text style={styles.menor}>
+            A recuperação individual não substitui
+            relatórios já registrados.
+          </Text>
+
+          <View style={styles.gradeDisponibilidade05}>
+            {disponibilidadeIA.map(item => {
+              const disponivel =
+                item.estado === 'disponivel';
+
+              const processando =
+                recuperandoIA === item.provedor;
+
+              return (
+                <View
+                  key={item.provedor}
+                  style={styles.cardDisponibilidade05}
+                >
+                  <Text style={styles.subtitulo}>
+                    {nomesProvedores05[item.provedor]}
+                  </Text>
+
+                  <Text style={[
+                    styles.estadoDisponibilidade05,
+                    {
+                      color: disponivel
+                        ? '#15803d'
+                        : '#92400e',
+                    },
+                  ]}>
+                    {processando
+                      ? 'Recuperando análise...'
+                      : estadosProvedores05[item.estado]}
+                  </Text>
+
+                  {item.pode_recuperar ? (
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      disabled={
+                        recuperandoIA !== null ||
+                        salvando ||
+                        gerandoMarcacoes ||
+                        reprocessandoOpenAI
+                      }
+                      style={[
+                        styles.botaoRecuperar05,
+                        recuperandoIA !== null &&
+                          { opacity: 0.6 },
+                      ]}
+                      onPress={() =>
+                        recuperarRelatorioIA(item)
+                      }
+                    >
+                      {processando ? (
+                        <ActivityIndicator color="#ffffff" />
+                      ) : (
+                        <Text style={styles.textoRecuperar05}>
+                          Tentar novamente
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  ) : !disponivel ? (
+                    <Text style={styles.menor}>
+                      Recuperação indisponível para este registro.
+                    </Text>
+                  ) : (
+                    <Text style={styles.menor}>
+                      Disponível para revisão profissional.
+                    </Text>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+
+          {recuperandoIA ? (
+            <Text style={styles.menor}>
+              Mantenha esta tela aberta durante a recuperação.
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+
+      {!carregando && !erro && relatorios.length > 0 ? (
         <ComparacaoConfiancaIA relatorios={relatorios} />
       ) : null}
 
@@ -486,12 +709,22 @@ export default function DetalheAvaliacaoScreen() {
 
       {comparacoes.map(comparacao => (
         <View key={comparacao.id_comparacao} style={styles.card}>
-          {Object.entries(comparacao.comparacao_multimodal?.componentes || {}).map(
+          {Object.entries(
+            comparacao.comparacao_multimodal?.componentes || {},
+          ).sort(
+            ([a], [b]) =>
+              'TIMES'.indexOf(a) -
+              'TIMES'.indexOf(b),
+          ).map(
             ([letra, item]) => (
               <View key={letra} style={styles.item}>
                 <Text style={styles.subtitulo}>{letra} — {item.nome || ''}</Text>
                 <Text style={styles.menor}>
-                  Situação descritiva: {item.situacao_descritiva || 'Inconclusiva'}
+                  Situação descritiva: {
+                    situacoesTimes05[
+                      item.situacao_descritiva || ''
+                    ] || 'Inconclusiva'
+                  }
                 </Text>
                 <Text style={styles.menor}>
                   Diferença no estado de avaliação: {item.divergencia_status ? 'Sim' : 'Não'}
@@ -511,6 +744,46 @@ export default function DetalheAvaliacaoScreen() {
 }
 
 const styles = StyleSheet.create({
+  gradeDisponibilidade05: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginVertical: 14,
+  },
+
+  cardDisponibilidade05: {
+    flexGrow: 1,
+    flexBasis: 230,
+    minWidth: 0,
+    backgroundColor: '#f5f9fc',
+    borderWidth: 1,
+    borderColor: '#ccdfec',
+    borderRadius: 12,
+    padding: 16,
+    gap: 10,
+  },
+
+  estadoDisponibilidade05: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  botaoRecuperar05: {
+    minHeight: 46,
+    backgroundColor: '#005088',
+    borderRadius: 9,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 12,
+  },
+
+  textoRecuperar05: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+
   container: {
     padding: 18,
     paddingBottom: 60,
