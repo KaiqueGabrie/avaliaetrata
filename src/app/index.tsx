@@ -174,6 +174,30 @@ export default function WelcomeScreen() {
             </View>
 
             <View style={styles.formulario}>
+              <View style={styles.abas}>
+                <View style={[
+                  styles.aba,
+                  styles.abaAtiva,
+                ]}>
+                  <Text style={styles.textoAbaAtiva}>
+                    Login
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Cadastrar novo enfermeiro"
+                  disabled={carregando}
+                  style={styles.aba}
+                  onPress={() =>
+                    router.push('/cadastro-enfermeiro')
+                  }
+                >
+                  <Text style={styles.textoAba}>
+                    Cadastrar-se
+                  </Text>
+                </TouchableOpacity>
+              </View>
               <Text style={styles.tituloFormulario}>
                 Acesse sua conta
               </Text>
@@ -303,6 +327,39 @@ export default function WelcomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  abas: {
+    flexDirection: 'row',
+    backgroundColor: '#f1f5f9',
+    padding: 4,
+    gap: 4,
+    borderRadius: 10,
+    marginBottom: 24,
+  },
+
+  aba: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  abaAtiva: {
+    backgroundColor: '#005088',
+  },
+
+  textoAba: {
+    color: '#005088',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+
+  textoAbaAtiva: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+
   container: {
     flex: 1,
     backgroundColor: '#e4edf3',

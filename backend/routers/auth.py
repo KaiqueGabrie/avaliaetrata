@@ -1,10 +1,12 @@
 
+import hmac
 import os
 
 from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
+    Header,
     status,
 )
 from fastapi.security import (
@@ -125,16 +127,29 @@ def obter_enfermeiro_atual(
 def cadastrar_enfermeiro(
     dados: CadastroEnfermeiro,
     db: Session = Depends(get_db),
+    codigo_convite: str | None = Header(
+        default=None,
+        alias="X-Registration-Invite",
+    ),
 ):
 
-    # Cadastro liberado apenas para testes locais.
-    if os.getenv(
-        "ALLOW_TEST_REGISTRATION", "false"
-    ).lower() != "true":
+    # Cadastro restrito por convite configurado no servidor.
+    convite_configurado = os.getenv(
+        "REGISTRATION_INVITE_CODE", ""
+    ).strip()
 
+    if (
+        len(convite_configurado) < 32
+        or not isinstance(codigo_convite, str)
+        or len(codigo_convite) > 256
+        or not hmac.compare_digest(
+            codigo_convite.strip().encode("utf-8"),
+            convite_configurado.encode("utf-8"),
+        )
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cadastro publico desabilitado.",
+            detail="Convite invalido ou cadastro indisponivel.",
         )
 
     # Verificar duplicidade de email ou CPF.
@@ -179,7 +194,7 @@ def cadastrar_enfermeiro(
             acao="CADASTRO_ENFERMEIRO",
             id_enfermeiro=novo_enfermeiro.id_enfermeiro,
             detalhes={
-                "origem": "cadastro_teste",
+                "origem": "cadastro_convite",
             },
         )
 
